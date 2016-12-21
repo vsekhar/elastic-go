@@ -30,10 +30,7 @@
 
 package gc
 
-import (
-	"cmd/internal/obj"
-	"fmt"
-)
+import "cmd/internal/obj"
 
 func Prog(as obj.As) *obj.Prog {
 	var p *obj.Prog
@@ -138,9 +135,6 @@ func Naddr(a *obj.Addr, n *Node) {
 
 	if s == nil {
 		Fatalf("naddr: nil sym %v", n)
-	}
-	if n.Name.Method && n.Type != nil && n.Type.Sym != nil && n.Type.Sym.Pkg != nil {
-		Fatalf("naddr: weird method %v", n)
 	}
 
 	a.Type = obj.TYPE_MEM
@@ -314,9 +308,5 @@ func Gins(as obj.As, f, t *Node) *obj.Prog {
 	p := Prog(as)
 	Naddr(&p.From, f)
 	Naddr(&p.To, t)
-
-	if Debug['g'] != 0 {
-		fmt.Printf("%v\n", p)
-	}
 	return p
 }

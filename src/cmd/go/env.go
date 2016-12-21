@@ -40,7 +40,7 @@ func mkEnv() []envVar {
 		{"GOHOSTARCH", runtime.GOARCH},
 		{"GOHOSTOS", runtime.GOOS},
 		{"GOOS", goos},
-		{"GOPATH", os.Getenv("GOPATH")},
+		{"GOPATH", buildContext.GOPATH},
 		{"GORACE", os.Getenv("GORACE")},
 		{"GOROOT", goroot},
 		{"GOTOOLDIR", toolDir},
@@ -62,13 +62,11 @@ func mkEnv() []envVar {
 		env = append(env, envVar{"GO386", os.Getenv("GO386")})
 	}
 
-	if goos != "plan9" {
-		cmd := b.gccCmd(".")
-		env = append(env, envVar{"CC", cmd[0]})
-		env = append(env, envVar{"GOGCCFLAGS", strings.Join(cmd[3:], " ")})
-		cmd = b.gxxCmd(".")
-		env = append(env, envVar{"CXX", cmd[0]})
-	}
+	cmd := b.gccCmd(".")
+	env = append(env, envVar{"CC", cmd[0]})
+	env = append(env, envVar{"GOGCCFLAGS", strings.Join(cmd[3:], " ")})
+	cmd = b.gxxCmd(".")
+	env = append(env, envVar{"CXX", cmd[0]})
 
 	if buildContext.CgoEnabled {
 		env = append(env, envVar{"CGO_ENABLED", "1"})
@@ -104,7 +102,7 @@ func extraEnvVars() []envVar {
 }
 
 func runEnv(cmd *Command, args []string) {
-	env := mkEnv()
+	env := newEnv
 	env = append(env, extraEnvVars()...)
 	if len(args) > 0 {
 		for _, name := range args {

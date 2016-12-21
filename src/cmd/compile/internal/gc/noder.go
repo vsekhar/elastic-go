@@ -6,6 +6,7 @@ package gc
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -14,17 +15,21 @@ import (
 )
 
 func parseFile(filename string) {
-	p := noder{baseline: lexlineno}
-	file, err := syntax.ReadFile(filename, p.error, p.pragma, 0)
+	src, err := os.Open(filename)
 	if err != nil {
-		Fatalf("syntax.ReadFile %s: %v", filename, err)
+		fmt.Println(err)
+		errorexit()
 	}
+	defer src.Close()
+
+	p := noder{baseline: lexlineno}
+	file, _ := syntax.Parse(src, p.error, p.pragma, 0) // errors are tracked via p.error
 
 	p.file(file)
 
 	if !imported_unsafe {
 		for _, x := range p.linknames {
-			p.error(0, x, "//go:linkname only allowed in Go files that import \"unsafe\"")
+			p.error(syntax.Error{Line: x, Msg: "//go:linkname only allowed in Go files that import \"unsafe\""})
 		}
 	}
 
@@ -59,9 +64,6 @@ func (p *noder) decls(decls []syntax.Decl) (l []*Node) {
 		switch decl := decl.(type) {
 		case *syntax.ImportDecl:
 			p.importDecl(decl)
-
-		case *syntax.AliasDecl:
-			p.aliasDecl(decl)
 
 		case *syntax.VarDecl:
 			l = append(l, p.varDecl(decl)...)
@@ -147,100 +149,6 @@ func (p *noder) importDecl(imp *syntax.ImportDecl) {
 	my.Def = pack
 	my.Lastlineno = pack.Lineno
 	my.Block = 1 // at top level
-}
-
-func (p *noder) aliasDecl(decl *syntax.AliasDecl) {
-	// Because alias declarations must refer to imported entities
-	// which are already set up, we can do all checks right here.
-	// We won't know anything about entities that have not been
-	// declared yet, but since they cannot have been imported, we
-	// know there's an error and we don't care about the details.
-
-	// The original entity must be denoted by a qualified identifier.
-	// (The parser doesn't make this restriction to be more error-
-	// tolerant.)
-	qident, ok := decl.Orig.(*syntax.SelectorExpr)
-	if !ok {
-		// TODO(gri) This prints a dot-imported object with qualification
-		//           (confusing error). Fix this.
-		yyerror("invalid alias: %v is not a package-qualified identifier", p.expr(decl.Orig))
-		return
-	}
-
-	pkg := p.expr(qident.X)
-	if pkg.Op != OPACK {
-		yyerror("invalid alias: %v is not a package", pkg)
-		return
-	}
-	pkg.Used = true
-
-	// Resolve original entity
-	orig := oldname(restrictlookup(qident.Sel.Value, pkg.Name.Pkg))
-	if orig.Sym.Flags&SymAlias != 0 {
-		Fatalf("original %v marked as alias", orig.Sym)
-	}
-
-	// An alias declaration must not refer to package unsafe.
-	if orig.Sym.Pkg == unsafepkg {
-		yyerror("invalid alias: %v refers to package unsafe (%v)", decl.Name.Value, orig)
-		return
-	}
-
-	// The aliased entity must be from a matching constant, type, variable,
-	// or function declaration, respectively.
-	var what string
-	switch decl.Tok {
-	case syntax.Const:
-		if orig.Op != OLITERAL {
-			what = "constant"
-		}
-	case syntax.Type:
-		if orig.Op != OTYPE {
-			what = "type"
-		}
-	case syntax.Var:
-		if orig.Op != ONAME || orig.Class != PEXTERN {
-			what = "variable"
-		}
-	case syntax.Func:
-		if orig.Op != ONAME || orig.Class != PFUNC {
-			what = "function"
-		}
-	default:
-		Fatalf("unexpected token: %s", decl.Tok)
-	}
-	if what != "" {
-		yyerror("invalid alias: %v is not a %s", orig, what)
-		return
-	}
-
-	// handle special cases
-	switch decl.Name.Value {
-	case "_":
-		return // don't declare blank aliases
-	case "init":
-		yyerror("cannot declare init - must be non-alias function declaration")
-		return
-	}
-
-	// declare alias
-	// (this is similar to handling dot imports)
-	asym := p.name(decl.Name)
-	if asym.Def != nil {
-		redeclare(asym, "in alias declaration")
-		return
-	}
-	asym.Flags |= SymAlias
-	asym.Def = orig
-	asym.Block = block
-	asym.Lastlineno = lineno
-
-	if exportname(asym.Name) {
-		// TODO(gri) newname(asym) is only needed to satisfy exportsym
-		// (and indirectly, exportlist). We should be able to just
-		// collect the Syms, eventually.
-		exportsym(newname(asym))
-	}
 }
 
 func (p *noder) varDecl(decl *syntax.VarDecl) []*Node {
@@ -1099,24 +1007,33 @@ func (p *noder) lineno(n syntax.Node) {
 	lineno = p.baseline + l - 1
 }
 
-func (p *noder) error(_, line int, msg string) {
-	yyerrorl(p.baseline+int32(line)-1, "%s", msg)
+func (p *noder) error(err error) {
+	line := p.baseline
+	var msg string
+	if err, ok := err.(syntax.Error); ok {
+		line += int32(err.Line) - 1
+		msg = err.Msg
+	} else {
+		msg = err.Error()
+	}
+	yyerrorl(line, "%s", msg)
 }
 
 func (p *noder) pragma(pos, line int, text string) syntax.Pragma {
 	switch {
 	case strings.HasPrefix(text, "line "):
-		i := strings.IndexByte(text, ':')
+		// Want to use LastIndexByte below but it's not defined in Go1.4 and bootstrap fails.
+		i := strings.LastIndex(text, ":") // look from right (Windows filenames may contain ':')
 		if i < 0 {
 			break
 		}
 		n, err := strconv.Atoi(text[i+1:])
 		if err != nil {
-			// todo: make this an error instead? it is almost certainly a bug.
+			// TODO: make this an error instead? it is almost certainly a bug.
 			break
 		}
 		if n > 1e8 {
-			p.error(pos, line, "line number out of range")
+			p.error(syntax.Error{Pos: pos, Line: line, Msg: "line number out of range"})
 			errorexit()
 		}
 		if n <= 0 {
@@ -1132,7 +1049,7 @@ func (p *noder) pragma(pos, line int, text string) syntax.Pragma {
 
 		f := strings.Fields(text)
 		if len(f) != 3 {
-			p.error(pos, line, "usage: //go:linkname localname linkname")
+			p.error(syntax.Error{Pos: pos, Line: line, Msg: "usage: //go:linkname localname linkname"})
 			break
 		}
 		lookup(f[1]).Linkname = f[2]
@@ -1149,4 +1066,19 @@ func (p *noder) pragma(pos, line int, text string) syntax.Pragma {
 	}
 
 	return 0
+}
+
+func mkname(sym *Sym) *Node {
+	n := oldname(sym)
+	if n.Name != nil && n.Name.Pack != nil {
+		n.Name.Pack.Used = true
+	}
+	return n
+}
+
+func unparen(x *Node) *Node {
+	for x.Op == OPAREN {
+		x = x.Left
+	}
+	return x
 }

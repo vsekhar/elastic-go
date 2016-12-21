@@ -119,8 +119,12 @@ var linkobj string
 
 var bout *bio.Writer
 
+// nerrors is the number of compiler errors reported
+// since the last call to saveerrors.
 var nerrors int
 
+// nsavederrors is the total number of compiler errors
+// reported before the last call to saveerrors.
 var nsavederrors int
 
 var nsyntaxerrors int
@@ -363,18 +367,18 @@ var pcloc int32
 
 var Thearch Arch
 
-var Newproc *Node
-
-var Deferproc *Node
-
-var Deferreturn *Node
-
-var panicindex *Node
-
-var panicslice *Node
-
-var panicdivide *Node
-
-var growslice *Node
-
-var panicdottype *Node
+var (
+	Newproc,
+	Deferproc,
+	Deferreturn,
+	panicindex,
+	panicslice,
+	panicdivide,
+	growslice,
+	panicdottype,
+	panicnildottype,
+	assertE2I,
+	assertE2I2,
+	assertI2I,
+	assertI2I2 *Node
+)

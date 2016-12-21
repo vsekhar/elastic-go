@@ -3,7 +3,6 @@
 // license that can be found in the LICENSE file.
 
 // Binary package export.
-// (see fmt.go, parser.go as "documentation" for how to use/setup data structures)
 
 /*
 1) Export data encoding principles:
@@ -71,8 +70,9 @@ same type was imported before via another import, the importer must use
 the previously imported type pointer so that we have exactly one version
 (i.e., one pointer) for each named type (and read but discard the current
 type encoding). Unnamed types simply encode their respective fields.
-Aliases are encoded starting with their name followed by the original
-(aliased) object.
+Aliases are encoded starting with their name followed by the qualified
+identifier denoting the original (aliased) object, which was exported
+earlier.
 
 In the encoding, some lists start with the list length. Some lists are
 terminated with an end marker (usually for lists where we may not know
@@ -458,19 +458,16 @@ func (p *exporter) obj(sym *Sym) {
 			Fatalf("exporter: export of non-local alias: %v", sym)
 		}
 		p.string(sym.Name)
-		sym = sym.Def.Sym // original object
-		// fall through to export original
-		// Multiple aliases to the same original will cause that
-		// original to be exported multiple times (issue #17636).
-		// TODO(gri) fix this
+		orig := sym.Def.Sym
+		if orig.Flags&SymAlias != 0 {
+			Fatalf("exporter: original object %v marked as alias", sym)
+		}
+		p.qualifiedName(orig)
+		return
 	}
 
 	if sym != sym.Def.Sym {
 		Fatalf("exporter: exported object %v is not original %v", sym, sym.Def.Sym)
-	}
-
-	if sym.Flags&SymAlias != 0 {
-		Fatalf("exporter: original object %v marked as alias", sym)
 	}
 
 	// Exported objects may be from different packages because they

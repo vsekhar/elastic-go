@@ -1966,7 +1966,7 @@ OpSwitch:
 		typecheckas(n)
 
 		// Code that creates temps does not bother to set defn, so do it here.
-		if n.Left.Op == ONAME && strings.HasPrefix(n.Left.Sym.Name, "autotmp_") {
+		if n.Left.Op == ONAME && n.Left.IsAutoTmp() {
 			n.Left.Name.Defn = n
 		}
 		break OpSwitch
@@ -3113,7 +3113,6 @@ func typecheckcomplit(n *Node) *Node {
 	}
 
 	if nerr != nerrors {
-		n.Type = nil
 		return n
 	}
 
@@ -3415,6 +3414,12 @@ out:
 
 // type check function definition
 func typecheckfunc(n *Node) {
+	for _, ln := range n.Func.Dcl {
+		if ln.Op == ONAME && (ln.Class == PPARAM || ln.Class == PPARAMOUT) {
+			ln.Name.Decldepth = 1
+		}
+	}
+
 	n.Func.Nname = typecheck(n.Func.Nname, Erv|Easgn)
 	t := n.Func.Nname.Type
 	if t == nil {
@@ -3425,12 +3430,6 @@ func typecheckfunc(n *Node) {
 	rcvr := t.Recv()
 	if rcvr != nil && n.Func.Shortname != nil {
 		addmethod(n.Func.Shortname.Sym, t, true, n.Func.Pragma&Nointerface != 0)
-	}
-
-	for _, ln := range n.Func.Dcl {
-		if ln.Op == ONAME && (ln.Class == PPARAM || ln.Class == PPARAMOUT) {
-			ln.Name.Decldepth = 1
-		}
 	}
 }
 

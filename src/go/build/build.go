@@ -76,8 +76,9 @@ type Context struct {
 	// If IsDir is nil, Import calls os.Stat and uses the result's IsDir method.
 	IsDir func(path string) bool
 
-	// HasSubdir reports whether dir is a subdirectory of
-	// (perhaps multiple levels below) root.
+	// HasSubdir reports whether dir is lexically a subdirectory of
+	// root, perhaps multiple levels below. It does not try to check
+	// whether dir exists.
 	// If so, HasSubdir sets rel to a slash-separated path that
 	// can be joined to root to produce a path equivalent to dir.
 	// If HasSubdir is nil, Import uses an implementation built on
@@ -256,13 +257,32 @@ func (ctxt *Context) SrcDirs() []string {
 // if set, or else the compiled code's GOARCH, GOOS, and GOROOT.
 var Default Context = defaultContext()
 
+func defaultGOPATH() string {
+	env := "HOME"
+	if runtime.GOOS == "windows" {
+		env = "USERPROFILE"
+	} else if runtime.GOOS == "plan9" {
+		env = "home"
+	}
+	if home := os.Getenv(env); home != "" {
+		def := filepath.Join(home, "go")
+		if def == runtime.GOROOT() {
+			// Don't set the default GOPATH to GOROOT,
+			// as that will trigger warnings from the go tool.
+			return ""
+		}
+		return def
+	}
+	return ""
+}
+
 func defaultContext() Context {
 	var c Context
 
 	c.GOARCH = envOr("GOARCH", runtime.GOARCH)
 	c.GOOS = envOr("GOOS", runtime.GOOS)
 	c.GOROOT = pathpkg.Clean(runtime.GOROOT())
-	c.GOPATH = envOr("GOPATH", "")
+	c.GOPATH = envOr("GOPATH", defaultGOPATH())
 	c.Compiler = runtime.Compiler
 
 	// Each major Go release in the Go 1.x series should add a tag here.

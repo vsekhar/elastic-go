@@ -72,6 +72,15 @@ type Node struct {
 	flags     uint8 // TODO: store more bool fields in this flag field
 }
 
+// IsAutoTmp indicates if n was created by the compiler as a temporary,
+// based on the setting of the .AutoTemp flag in n's Name.
+func (n *Node) IsAutoTmp() bool {
+	if n == nil || n.Op != ONAME {
+		return false
+	}
+	return n.Name.AutoTemp
+}
+
 const (
 	hasBreak = 1 << iota
 	isClosureVar
@@ -182,12 +191,12 @@ type Name struct {
 	Decldepth int32  // declaration loop depth, increased for every loop or label
 	Vargen    int32  // unique name for ONAME within a function.  Function outputs are numbered starting at one.
 	Funcdepth int32
-	Method    bool // OCALLMETH name
 	Readonly  bool
 	Captured  bool // is the variable captured by a closure
 	Byval     bool // is the variable captured by value or by reference
 	Needzero  bool // if it contains pointers, needs to be zeroed on function entry
 	Keepalive bool // mark value live across unknown assembly call
+	AutoTemp  bool // is the variable a temporary (implies no dwarf info. reset if escapes to heap)
 }
 
 type Param struct {
@@ -308,6 +317,7 @@ type Func struct {
 	Needctxt        bool   // function uses context register (has closure variables)
 	ReflectMethod   bool   // function calls reflect.Type.Method or MethodByName
 	IsHiddenClosure bool
+	NoFramePointer  bool // Must not use a frame pointer for this function
 }
 
 type Op uint8

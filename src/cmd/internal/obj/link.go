@@ -311,7 +311,7 @@ const (
 	ABaseAMD64
 	ABasePPC64
 	ABaseARM64
-	ABaseMIPS64
+	ABaseMIPS
 	ABaseS390X
 
 	AllowedOpCodes = 1 << 10            // The number of opcodes available for any given architecture.
@@ -532,12 +532,17 @@ const (
 	// R_ADDRARM64 relocates an adrp, add pair to compute the address of the
 	// referenced symbol.
 	R_ADDRARM64
-	// R_ADDRMIPS (only used on mips64) resolves to the low 16 bits of an external
+	// R_ADDRMIPS (only used on mips/mips64) resolves to the low 16 bits of an external
 	// address, by encoding it into the instruction.
 	R_ADDRMIPS
 	// R_ADDROFF resolves to a 32-bit offset from the beginning of the section
 	// holding the data being relocated to the referenced symbol.
 	R_ADDROFF
+	// R_WEAKADDROFF resolves just like R_ADDROFF but is a weak relocation.
+	// A weak relocation does not make the symbol it refers to reachable,
+	// and is only honored by the linker if the symbol is in some other way
+	// reachable.
+	R_WEAKADDROFF
 	R_SIZE
 	R_CALL
 	R_CALLARM
@@ -660,7 +665,7 @@ const (
 	// TODO(mundaym): remove once variants can be serialized - see issue 14218.
 	R_PCRELDBL
 
-	// R_ADDRMIPSU (only used on mips64) resolves to the sign-adjusted "upper" 16
+	// R_ADDRMIPSU (only used on mips/mips64) resolves to the sign-adjusted "upper" 16
 	// bits (bit 16-31) of an external address, by encoding it into the instruction.
 	R_ADDRMIPSU
 	// R_ADDRMIPSTLS (only used on mips64) resolves to the low 16 bits of a TLS

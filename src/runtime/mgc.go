@@ -176,10 +176,6 @@ func gcinit() {
 	}
 
 	_ = setGCPercent(readgogc())
-	for datap := &firstmoduledata; datap != nil; datap = datap.next {
-		datap.gcdatamask = progToPointerMask((*byte)(unsafe.Pointer(datap.gcdata)), datap.edata-datap.data)
-		datap.gcbssmask = progToPointerMask((*byte)(unsafe.Pointer(datap.gcbss)), datap.ebss-datap.bss)
-	}
 	memstats.gc_trigger = heapminimum
 	// Compute the goal heap size based on the trigger:
 	//   trigger = marked * (1 + triggerRatio)
@@ -196,13 +192,13 @@ func gcinit() {
 
 func readgogc() int32 {
 	p := gogetenv("GOGC")
-	if p == "" {
-		return 100
-	}
 	if p == "off" {
 		return -1
 	}
-	return int32(atoi(p))
+	if n, ok := atoi32(p); ok {
+		return n
+	}
+	return 100
 }
 
 // gcenable is called after the bulk of the runtime initialization,
@@ -628,6 +624,14 @@ func (c *gcControllerState) endCycle() {
 //
 //go:nowritebarrier
 func (c *gcControllerState) enlistWorker() {
+	// If there are idle Ps, wake one so it will run an idle worker.
+	if atomic.Load(&sched.npidle) != 0 && atomic.Load(&sched.nmspinning) == 0 {
+		wakep()
+		return
+	}
+
+	// There are no idle Ps. If we need more dedicated workers,
+	// try to preempt a running P so it will switch to a worker.
 	if c.dedicatedMarkWorkersNeeded <= 0 {
 		return
 	}
@@ -777,6 +781,22 @@ var work struct {
 	empty uint64                   // lock-free list of empty blocks workbuf
 	pad0  [sys.CacheLineSize]uint8 // prevents false-sharing between full/empty and nproc/nwait
 
+	// bytesMarked is the number of bytes marked this cycle. This
+	// includes bytes blackened in scanned objects, noscan objects
+	// that go straight to black, and permagrey objects scanned by
+	// markroot during the concurrent scan phase. This is updated
+	// atomically during the cycle. Updates may be batched
+	// arbitrarily, since the value is only read at the end of the
+	// cycle.
+	//
+	// Because of benign races during marking, this number may not
+	// be the exact number of marked bytes, but it should be very
+	// close.
+	//
+	// Put this field here because it needs 64-bit atomic access
+	// (and thus 8-byte alignment even on 32-bit architectures).
+	bytesMarked uint64
+
 	markrootNext uint32 // next markroot job
 	markrootJobs uint32 // number of markroot jobs
 
@@ -838,19 +858,6 @@ var work struct {
 	// program started if debug.gctrace > 0.
 	totaltime int64
 
-	// bytesMarked is the number of bytes marked this cycle. This
-	// includes bytes blackened in scanned objects, noscan objects
-	// that go straight to black, and permagrey objects scanned by
-	// markroot during the concurrent scan phase. This is updated
-	// atomically during the cycle. Updates may be batched
-	// arbitrarily, since the value is only read at the end of the
-	// cycle.
-	//
-	// Because of benign races during marking, this number may not
-	// be the exact number of marked bytes, but it should be very
-	// close.
-	bytesMarked uint64
-
 	// initialHeapLive is the value of memstats.heap_live at the
 	// beginning of this GC cycle.
 	initialHeapLive uint64
@@ -895,7 +902,7 @@ type gcMode int
 const (
 	gcBackgroundMode gcMode = iota // concurrent GC and sweep
 	gcForceMode                    // stop-the-world GC now, concurrent sweep
-	gcForceBlockMode               // stop-the-world GC now and STW sweep
+	gcForceBlockMode               // stop-the-world GC now and STW sweep (forced by user)
 )
 
 // gcShouldStart returns true if the exit condition for the _GCoff
@@ -958,6 +965,9 @@ func gcStart(mode gcMode, forceTrigger bool) {
 			return
 		}
 	}
+
+	// For stats, check if this GC was forced by the user.
+	forced := mode != gcBackgroundMode
 
 	// In gcstoptheworld debug mode, upgrade the mode accordingly.
 	// We do this after re-checking the transition condition so
@@ -1062,6 +1072,10 @@ func gcStart(mode gcMode, forceTrigger bool) {
 		t := nanotime()
 		work.tMark, work.tMarkTerm = t, t
 		work.heapGoal = work.heap0
+
+		if forced {
+			memstats.numforcedgc++
+		}
 
 		// Perform mark termination. This will restart the world.
 		gcMarkTermination()
@@ -1501,8 +1515,10 @@ func gcBgMarkWorker(_p_ *p) {
 				throw("gcBgMarkWorker: unexpected gcMarkWorkerMode")
 			case gcMarkWorkerDedicatedMode:
 				gcDrain(&_p_.gcw, gcDrainNoBlock|gcDrainFlushBgCredit)
-			case gcMarkWorkerFractionalMode, gcMarkWorkerIdleMode:
+			case gcMarkWorkerFractionalMode:
 				gcDrain(&_p_.gcw, gcDrainUntilPreempt|gcDrainFlushBgCredit)
+			case gcMarkWorkerIdleMode:
+				gcDrain(&_p_.gcw, gcDrainIdle|gcDrainUntilPreempt|gcDrainFlushBgCredit)
 			}
 			casgstatus(gp, _Gwaiting, _Grunning)
 		})

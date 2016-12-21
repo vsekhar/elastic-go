@@ -107,6 +107,12 @@ func caninl(fn *Node) {
 		return
 	}
 
+	// If marked "go:cgo_unsafe_args", don't inline
+	if fn.Func.Pragma&CgoUnsafeArgs != 0 {
+		reason = "marked go:cgo_unsafe_args"
+		return
+	}
+
 	// If fn has no body (is defined outside of Go), cannot inline it.
 	if fn.Nbody.Len() == 0 {
 		reason = "no function body"
@@ -781,10 +787,9 @@ func mkinlcall1(n *Node, fn *Node, isddd bool) *Node {
 			as.Right = nodnil()
 			as.Right.Type = varargtype
 		} else {
-			vararrtype := typArray(varargtype.Elem(), int64(varargcount))
-			as.Right = nod(OCOMPLIT, nil, typenod(vararrtype))
+			varslicetype := typSlice(varargtype.Elem())
+			as.Right = nod(OCOMPLIT, nil, typenod(varslicetype))
 			as.Right.List.Set(varargs)
-			as.Right = nod(OSLICE, as.Right, nil)
 		}
 
 		as = typecheck(as, Etop)

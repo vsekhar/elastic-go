@@ -178,7 +178,9 @@ func (p *Package) copyBuild(pp *build.Package) {
 	p.CgoCXXFLAGS = pp.CgoCXXFLAGS
 	p.CgoLDFLAGS = pp.CgoLDFLAGS
 	p.CgoPkgConfig = pp.CgoPkgConfig
-	p.Imports = pp.Imports
+	// We modify p.Imports in place, so make copy now.
+	p.Imports = make([]string, len(pp.Imports))
+	copy(p.Imports, pp.Imports)
 	p.TestGoFiles = pp.TestGoFiles
 	p.TestImports = pp.TestImports
 	p.XTestGoFiles = pp.XTestGoFiles
@@ -371,10 +373,8 @@ func loadImport(path, srcDir string, parent *Package, stk *importStack, importPo
 			err = fmt.Errorf("code in directory %s expects import %q", bp.Dir, bp.ImportComment)
 		}
 		p.load(stk, bp, err)
-		if p.Error != nil && p.Error.Pos == "" && len(importPos) > 0 {
-			pos := importPos[0]
-			pos.Filename = shortPath(pos.Filename)
-			p.Error.Pos = pos.String()
+		if p.Error != nil && p.Error.Pos == "" {
+			p = setErrorPos(p, importPos)
 		}
 
 		if origPath != cleanImport(origPath) {
@@ -388,11 +388,11 @@ func loadImport(path, srcDir string, parent *Package, stk *importStack, importPo
 
 	// Checked on every import because the rules depend on the code doing the importing.
 	if perr := disallowInternal(srcDir, p, stk); perr != p {
-		return perr
+		return setErrorPos(perr, importPos)
 	}
 	if mode&useVendor != 0 {
 		if perr := disallowVendor(srcDir, origPath, p, stk); perr != p {
-			return perr
+			return setErrorPos(perr, importPos)
 		}
 	}
 
@@ -402,12 +402,7 @@ func loadImport(path, srcDir string, parent *Package, stk *importStack, importPo
 			ImportStack: stk.copy(),
 			Err:         fmt.Sprintf("import %q is a program, not an importable package", path),
 		}
-		if len(importPos) > 0 {
-			pos := importPos[0]
-			pos.Filename = shortPath(pos.Filename)
-			perr.Error.Pos = pos.String()
-		}
-		return &perr
+		return setErrorPos(&perr, importPos)
 	}
 
 	if p.local && parent != nil && !parent.local {
@@ -416,14 +411,18 @@ func loadImport(path, srcDir string, parent *Package, stk *importStack, importPo
 			ImportStack: stk.copy(),
 			Err:         fmt.Sprintf("local import %q in non-local package", path),
 		}
-		if len(importPos) > 0 {
-			pos := importPos[0]
-			pos.Filename = shortPath(pos.Filename)
-			perr.Error.Pos = pos.String()
-		}
-		return &perr
+		return setErrorPos(&perr, importPos)
 	}
 
+	return p
+}
+
+func setErrorPos(p *Package, importPos []token.Position) *Package {
+	if len(importPos) > 0 {
+		pos := importPos[0]
+		pos.Filename = shortPath(pos.Filename)
+		p.Error.Pos = pos.String()
+	}
 	return p
 }
 
@@ -575,6 +574,19 @@ func disallowInternal(srcDir string, p *Package, stk *importStack) *Package {
 
 	// There was an error loading the package; stop here.
 	if p.Error != nil {
+		return p
+	}
+
+	// The generated 'testmain' package is allowed to access testing/internal/...,
+	// as if it were generated into the testing directory tree
+	// (it's actually in a temporary directory outside any Go tree).
+	// This cleans up a former kludge in passing functionality to the testing package.
+	if strings.HasPrefix(p.ImportPath, "testing/internal") && len(*stk) >= 2 && (*stk)[len(*stk)-2] == "testmain" {
+		return p
+	}
+
+	// We can't check standard packages with gccgo.
+	if buildContext.Compiler == "gccgo" && p.Standard {
 		return p
 	}
 
@@ -905,12 +917,25 @@ func (p *Package) load(stk *importStack, bp *build.Package, err error) *Package 
 		importPaths = append(importPaths, "syscall")
 	}
 
-	// Currently build modes c-shared, pie, plugin, and -linkshared force
-	// external linking mode, and external linking mode forces an
-	// import of runtime/cgo.
-	pieCgo := buildBuildmode == "pie" && (buildContext.GOOS != "linux" || buildContext.GOARCH != "amd64")
-	if p.Name == "main" && !p.Goroot && (buildBuildmode == "c-shared" || buildBuildmode == "plugin" || pieCgo || buildLinkshared) {
-		importPaths = append(importPaths, "runtime/cgo")
+	if buildContext.CgoEnabled && p.Name == "main" && !p.Goroot {
+		// Currently build modes c-shared, pie (on systems that do not
+		// support PIE with internal linking mode), plugin, and
+		// -linkshared force external linking mode, as of course does
+		// -ldflags=-linkmode=external. External linking mode forces
+		// an import of runtime/cgo.
+		pieCgo := buildBuildmode == "pie" && (buildContext.GOOS != "linux" || buildContext.GOARCH != "amd64")
+		linkmodeExternal := false
+		for i, a := range buildLdflags {
+			if a == "-linkmode=external" {
+				linkmodeExternal = true
+			}
+			if a == "-linkmode" && i+1 < len(buildLdflags) && buildLdflags[i+1] == "external" {
+				linkmodeExternal = true
+			}
+		}
+		if buildBuildmode == "c-shared" || buildBuildmode == "plugin" || pieCgo || buildLinkshared || linkmodeExternal {
+			importPaths = append(importPaths, "runtime/cgo")
+		}
 	}
 
 	// Everything depends on runtime, except runtime, its internal
@@ -1613,7 +1638,7 @@ func computeBuildID(p *Package) {
 	// Include the content of runtime/internal/sys/zversion.go in the hash
 	// for package runtime. This will give package runtime a
 	// different build ID in each Go release.
-	if p.Standard && p.ImportPath == "runtime/internal/sys" {
+	if p.Standard && p.ImportPath == "runtime/internal/sys" && buildContext.Compiler != "gccgo" {
 		data, err := ioutil.ReadFile(filepath.Join(p.Dir, "zversion.go"))
 		if err != nil {
 			fatalf("go: %s", err)

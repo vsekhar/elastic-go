@@ -295,7 +295,9 @@ func staticcopy(l *Node, r *Node, out *[]*Node) bool {
 		if staticcopy(l, r, out) {
 			return true
 		}
-		*out = append(*out, nod(OAS, l, r))
+		// We may have skipped past one or more OCONVNOPs, so
+		// use conv to ensure r is assignable to l (#13263).
+		*out = append(*out, nod(OAS, l, conv(r, l.Type)))
 		return true
 
 	case OLITERAL:
@@ -1429,6 +1431,4 @@ func genAsInitNoCheck(n *Node, reportOnly bool) bool {
 		}
 		return true
 	}
-
-	return false
 }

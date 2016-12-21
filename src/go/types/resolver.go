@@ -14,12 +14,12 @@ import (
 	"unicode"
 )
 
-// A declInfo describes a package-level const, type, var, or func declaration.
+// A declInfo describes a package-level const, type, var, func, or alias declaration.
 type declInfo struct {
 	file  *Scope        // scope of file containing this declaration
 	lhs   []*Var        // lhs of n:1 variable declarations, or nil
 	typ   ast.Expr      // type, or nil
-	init  ast.Expr      // init expression, or nil
+	init  ast.Expr      // init/orig expression, or nil
 	fdecl *ast.FuncDecl // func declaration, or nil
 
 	// The deps field tracks initialization expression dependencies.
@@ -274,8 +274,12 @@ func (check *Checker) collectObjects() {
 							check.declare(fileScope, nil, obj, token.NoPos)
 						}
 
-					case *ast.AliasSpec:
-						check.errorf(s.Name.Pos(), "cannot handle alias declarations yet")
+					// Alias-related code. Keep for now.
+					// case *ast.AliasSpec:
+					// 	obj := NewAlias(s.Name.Pos(), pkg, s.Name.Name, nil)
+					// 	obj.typ = nil // unresolved
+					// 	obj.kind = d.Tok
+					// 	check.declarePkgObj(s.Name, obj, &declInfo{file: fileScope, init: s.Orig})
 
 					case *ast.ValueSpec:
 						switch d.Tok {

@@ -63,7 +63,7 @@ type Type interface {
 	// method signature, without a receiver, and the Func field is nil.
 	MethodByName(string) (Method, bool)
 
-	// NumMethod returns the number of methods in the type's method set.
+	// NumMethod returns the number of exported methods in the type's method set.
 	NumMethod() int
 
 	// Name returns the type's name within its package.
@@ -1226,8 +1226,10 @@ func (t *structType) Field(i int) (f StructField) {
 		f.Anonymous = true
 	}
 	if !p.name.isExported() {
-		// Fields never have an import path in their name.
-		f.PkgPath = t.pkgPath.name()
+		f.PkgPath = p.name.pkgPath()
+		if f.PkgPath == "" {
+			f.PkgPath = t.pkgPath.name()
+		}
 	}
 	if tag := p.name.tag(); tag != "" {
 		f.Tag = StructTag(tag)
@@ -1694,6 +1696,19 @@ func haveIdenticalUnderlyingType(T, V *rtype, cmpTags bool) bool {
 			}
 			if tf.offset != vf.offset {
 				return false
+			}
+			if !tf.name.isExported() {
+				tp := tf.name.pkgPath()
+				if tp == "" {
+					tp = t.pkgPath.name()
+				}
+				vp := vf.name.pkgPath()
+				if vp == "" {
+					vp = v.pkgPath.name()
+				}
+				if tp != vp {
+					return false
+				}
 			}
 		}
 		return true
@@ -2385,6 +2400,7 @@ func StructOf(fields []StructField) Type {
 		hasGCProg = false // records whether a struct-field type has a GCProg
 	)
 
+	lastzero := uintptr(0)
 	repr = append(repr, "struct {"...)
 	for i, field := range fields {
 		if field.Type == nil {
@@ -2555,7 +2571,20 @@ func StructOf(fields []StructField) Type {
 		}
 		size = f.offset + ft.size
 
+		if ft.size == 0 {
+			lastzero = size
+		}
+
 		fs[i] = f
+	}
+
+	if size > 0 && lastzero == size {
+		// This is a non-zero sized struct that ends in a
+		// zero-sized field. We add an extra byte of padding,
+		// to ensure that taking the address of the final
+		// zero-sized field can't manufacture a pointer to the
+		// next object in the heap. See issue 9401.
+		size++
 	}
 
 	var typ *structType
@@ -2659,6 +2688,7 @@ func StructOf(fields []StructField) Type {
 	typ.size = size
 	typ.align = typalign
 	typ.fieldAlign = typalign
+	typ.ptrToThis = 0
 	if len(methods) > 0 {
 		typ.tflag |= tflagUncommon
 	}

@@ -13,7 +13,6 @@ import (
 	"go/doc"
 	"go/parser"
 	"go/token"
-	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -335,7 +334,8 @@ If the last comment in the function starts with "Output:" then the output
 is compared exactly against the comment (see examples below). If the last
 comment begins with "Unordered output:" then the output is compared to the
 comment, however the order of the lines is ignored. An example with no such
-comment, or with no text after "Output:" is compiled but not executed.
+comment is compiled but not executed. An example with no text after
+"Output:" is compiled, executed, and expected to produce no output.
 
 Godoc displays the body of ExampleXXX to demonstrate the use
 of the function, constant, or variable XXX.  An example of a method M with
@@ -394,9 +394,9 @@ var (
 
 var testMainDeps = map[string]bool{
 	// Dependencies for testmain.
-	"testing": true,
-	"regexp":  true,
-	"os":      true,
+	"testing":                   true,
+	"testing/internal/testdeps": true,
+	"os": true,
 }
 
 func runTest(cmd *Command, args []string) {
@@ -867,7 +867,7 @@ func (b *builder) test(p *Package) (buildAction, runAction, printAction *action,
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if len(ptest.GoFiles) > 0 {
+	if len(ptest.GoFiles)+len(ptest.CgoFiles) > 0 {
 		pmain.imports = append(pmain.imports, ptest)
 		t.ImportTest = true
 	}
@@ -1122,12 +1122,8 @@ func (b *builder) runTest(a *action) error {
 	cmd.Env = envForDir(cmd.Dir, origEnv)
 	var buf bytes.Buffer
 	if testStreamOutput {
-		// The only way to keep the ordering of the messages and still
-		// intercept its contents. os/exec will share the same Pipe for
-		// both Stdout and Stderr when running the test program.
-		mw := io.MultiWriter(os.Stdout, &buf)
-		cmd.Stdout = mw
-		cmd.Stderr = mw
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 	} else {
 		cmd.Stdout = &buf
 		cmd.Stderr = &buf
@@ -1192,7 +1188,7 @@ func (b *builder) runTest(a *action) error {
 	t := fmt.Sprintf("%.3fs", time.Since(t0).Seconds())
 	if err == nil {
 		norun := ""
-		if testShowPass && !testStreamOutput {
+		if testShowPass {
 			a.testOutput.Write(out)
 		}
 		if bytes.HasPrefix(out, noTestsToRun[1:]) || bytes.Contains(out, noTestsToRun) {
@@ -1204,9 +1200,7 @@ func (b *builder) runTest(a *action) error {
 
 	setExitStatus(1)
 	if len(out) > 0 {
-		if !testStreamOutput {
-			a.testOutput.Write(out)
-		}
+		a.testOutput.Write(out)
 		// assume printing the test binary's exit status is superfluous
 	} else {
 		fmt.Fprintf(a.testOutput, "%s\n", err)
@@ -1453,8 +1447,8 @@ import (
 {{if not .TestMain}}
 	"os"
 {{end}}
-	"regexp"
 	"testing"
+	"testing/internal/testdeps"
 
 {{if .ImportTest}}
 	{{if .NeedTest}}_test{{else}}_{{end}} {{.Package.ImportPath | printf "%q"}}
@@ -1487,20 +1481,6 @@ var examples = []testing.InternalExample{
 {{range .Examples}}
 	{"{{.Name}}", {{.Package}}.{{.Name}}, {{.Output | printf "%q"}}, {{.Unordered}}},
 {{end}}
-}
-
-var matchPat string
-var matchRe *regexp.Regexp
-
-func matchString(pat, str string) (result bool, err error) {
-	if matchRe == nil || matchPat != pat {
-		matchPat = pat
-		matchRe, err = regexp.Compile(matchPat)
-		if err != nil {
-			return
-		}
-	}
-	return matchRe.MatchString(str), nil
 }
 
 {{if .CoverEnabled}}
@@ -1551,7 +1531,7 @@ func main() {
 		CoveredPackages: {{printf "%q" .Covered}},
 	})
 {{end}}
-	m := testing.MainStart(matchString, tests, benchmarks, examples)
+	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, examples)
 {{with .TestMain}}
 	{{.Package}}.{{.Name}}(m)
 {{else}}

@@ -36,6 +36,7 @@ type Config struct {
 	use387          bool                       // GO386=387
 	OldArch         bool                       // True for older versions of architecture, e.g. true for PPC64BE, false for PPC64LE
 	NeedsFpScratch  bool                       // No direct move between GP and FP register sets
+	BigEndian       bool                       //
 	DebugTest       bool                       // default true unless $GOSSAHASH != ""; as a debugging aid, make new code conditional on this and use GOSSAHASH to binary search for failing cases
 	sparsePhiCutoff uint64                     // Sparse phi location algorithm used above this #blocks*#variables score
 	curFunc         *Func
@@ -115,6 +116,7 @@ type Frontend interface {
 	SplitSlice(LocalSlot) (LocalSlot, LocalSlot, LocalSlot)
 	SplitComplex(LocalSlot) (LocalSlot, LocalSlot)
 	SplitStruct(LocalSlot, int) LocalSlot
+	SplitArray(LocalSlot) LocalSlot              // array must be length 1
 	SplitInt64(LocalSlot) (LocalSlot, LocalSlot) // returns (hi, lo)
 
 	// Line returns a string describing the given line number.
@@ -203,6 +205,7 @@ func NewConfig(arch string, fe Frontend, ctxt *obj.Link, optimize bool) *Config 
 		c.noDuffDevice = obj.GOOS == "darwin" // darwin linker cannot handle BR26 reloc with non-zero addend
 	case "ppc64":
 		c.OldArch = true
+		c.BigEndian = true
 		fallthrough
 	case "ppc64le":
 		c.IntSize = 8
@@ -218,7 +221,10 @@ func NewConfig(arch string, fe Frontend, ctxt *obj.Link, optimize bool) *Config 
 		c.noDuffDevice = true // TODO: Resolve PPC64 DuffDevice (has zero, but not copy)
 		c.NeedsFpScratch = true
 		c.hasGReg = true
-	case "mips64", "mips64le":
+	case "mips64":
+		c.BigEndian = true
+		fallthrough
+	case "mips64le":
 		c.IntSize = 8
 		c.PtrSize = 8
 		c.RegSize = 8
@@ -242,6 +248,24 @@ func NewConfig(arch string, fe Frontend, ctxt *obj.Link, optimize bool) *Config 
 		c.fpRegMask = fpRegMaskS390X
 		c.FPReg = framepointerRegS390X
 		c.LinkReg = linkRegS390X
+		c.hasGReg = true
+		c.noDuffDevice = true
+		c.BigEndian = true
+	case "mips":
+		c.BigEndian = true
+		fallthrough
+	case "mipsle":
+		c.IntSize = 4
+		c.PtrSize = 4
+		c.RegSize = 4
+		c.lowerBlock = rewriteBlockMIPS
+		c.lowerValue = rewriteValueMIPS
+		c.registers = registersMIPS[:]
+		c.gpRegMask = gpRegMaskMIPS
+		c.fpRegMask = fpRegMaskMIPS
+		c.specialRegMask = specialRegMaskMIPS
+		c.FPReg = framepointerRegMIPS
+		c.LinkReg = linkRegMIPS
 		c.hasGReg = true
 		c.noDuffDevice = true
 	default:

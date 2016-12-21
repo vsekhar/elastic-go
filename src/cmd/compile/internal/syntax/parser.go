@@ -24,25 +24,14 @@ type parser struct {
 	fnest  int    // function nesting level (for error handling)
 	xnest  int    // expression nesting level (for complit ambiguity resolution)
 	indent []byte // tracing support
-
-	nerrors int // error count
 }
 
 func (p *parser) init(src io.Reader, errh ErrorHandler, pragh PragmaHandler) {
-	p.scanner.init(src, func(pos, line int, msg string) {
-		p.nerrors++
-		if !debug && errh != nil {
-			errh(pos, line, msg)
-			return
-		}
-		panic(fmt.Sprintf("%d: %s\n", line, msg))
-	}, pragh)
+	p.scanner.init(src, errh, pragh)
 
 	p.fnest = 0
 	p.xnest = 0
 	p.indent = nil
-
-	p.nerrors = 0
 }
 
 func (p *parser) got(tok token) bool {
@@ -74,7 +63,7 @@ func (p *parser) syntax_error_at(pos, line int, msg string) {
 		defer p.trace("syntax_error (" + msg + ")")()
 	}
 
-	if p.tok == _EOF && p.nerrors > 0 {
+	if p.tok == _EOF && p.first != nil {
 		return // avoid meaningless follow-up errors
 	}
 
@@ -205,7 +194,7 @@ func (p *parser) file() *File {
 	p.want(_Semi)
 
 	// don't bother continuing if package clause has errors
-	if p.nerrors > 0 {
+	if p.first != nil {
 		return nil
 	}
 
@@ -315,38 +304,16 @@ func (p *parser) importDecl(group *Group) Decl {
 	return d
 }
 
-// AliasSpec = identifier "=>" [ PackageName "." ] identifier .
-func (p *parser) aliasDecl(tok token, name *Name, group *Group) Decl {
-	// no tracing since this is already called from a const/type/var/funcDecl
-
-	d := new(AliasDecl)
-	d.initFrom(&name.node)
-
-	// lhs identifier and "=>" have been consumed already
-
-	d.Tok = tok
-	d.Name = name
-	d.Orig = p.dotname(p.name())
-	d.Group = group
-
-	return d
-}
-
-// ConstSpec = IdentifierList [ [ Type ] "=" ExpressionList ] | AliasSpec .
+// ConstSpec = IdentifierList [ [ Type ] "=" ExpressionList ] .
 func (p *parser) constDecl(group *Group) Decl {
 	if trace {
 		defer p.trace("constDecl")()
 	}
 
-	name := p.name()
-	if p.got(_Rarrow) {
-		return p.aliasDecl(Const, name, group)
-	}
-
 	d := new(ConstDecl)
-	d.initFrom(&name.node)
+	d.init(p)
 
-	d.NameList = p.nameList(name)
+	d.NameList = p.nameList(p.name())
 	if p.tok != _EOF && p.tok != _Semi && p.tok != _Rparen {
 		d.Type = p.tryType()
 		if p.got(_Assign) {
@@ -358,21 +325,16 @@ func (p *parser) constDecl(group *Group) Decl {
 	return d
 }
 
-// TypeSpec = identifier Type | AliasSpec .
+// TypeSpec = identifier Type .
 func (p *parser) typeDecl(group *Group) Decl {
 	if trace {
 		defer p.trace("typeDecl")()
 	}
 
-	name := p.name()
-	if p.got(_Rarrow) {
-		return p.aliasDecl(Type, name, group)
-	}
-
 	d := new(TypeDecl)
-	d.initFrom(&name.node)
+	d.init(p)
 
-	d.Name = name
+	d.Name = p.name()
 	d.Type = p.tryType()
 	if d.Type == nil {
 		p.syntax_error("in type declaration")
@@ -384,21 +346,16 @@ func (p *parser) typeDecl(group *Group) Decl {
 	return d
 }
 
-// VarSpec = IdentifierList ( Type [ "=" ExpressionList ] | "=" ExpressionList ) | AliasSpec .
+// VarSpec = IdentifierList ( Type [ "=" ExpressionList ] | "=" ExpressionList ) .
 func (p *parser) varDecl(group *Group) Decl {
 	if trace {
 		defer p.trace("varDecl")()
 	}
 
-	name := p.name()
-	if p.got(_Rarrow) {
-		return p.aliasDecl(Var, name, group)
-	}
-
 	d := new(VarDecl)
-	d.initFrom(&name.node)
+	d.init(p)
 
-	d.NameList = p.nameList(name)
+	d.NameList = p.nameList(p.name())
 	if p.got(_Assign) {
 		d.Values = p.exprList()
 	} else {
@@ -415,28 +372,31 @@ func (p *parser) varDecl(group *Group) Decl {
 	return d
 }
 
-var badRecv = new(Field) // to signal invalid receiver in funcDecl
-
-// FunctionDecl = "func" FunctionName ( Function | Signature ) | "func" AliasSpec .
+// FunctionDecl = "func" FunctionName ( Function | Signature ) .
 // FunctionName = identifier .
 // Function     = Signature FunctionBody .
 // MethodDecl   = "func" Receiver MethodName ( Function | Signature ) .
 // Receiver     = Parameters .
-func (p *parser) funcDecl() Decl {
+func (p *parser) funcDecl() *FuncDecl {
 	if trace {
 		defer p.trace("funcDecl")()
 	}
 
-	var recv *Field
+	f := new(FuncDecl)
+	f.init(p)
+
+	badRecv := false
 	if p.tok == _Lparen {
-		recv = badRecv
-		switch list := p.paramList(); len(list) {
+		rcvr := p.paramList()
+		switch len(rcvr) {
 		case 0:
 			p.error("method has no receiver")
+			badRecv = true
 		case 1:
-			recv = list[0]
+			f.Recv = rcvr[0]
 		default:
 			p.error("method has multiple receivers")
+			badRecv = true
 		}
 	}
 
@@ -444,11 +404,6 @@ func (p *parser) funcDecl() Decl {
 		p.syntax_error("expecting name or (")
 		p.advance(_Lbrace, _Semi)
 		return nil
-	}
-
-	name := p.name()
-	if recv == nil && p.got(_Rarrow) {
-		return p.aliasDecl(Func, name, nil)
 	}
 
 	// TODO(gri) check for regular functions only
@@ -465,11 +420,7 @@ func (p *parser) funcDecl() Decl {
 	// 	}
 	// }
 
-	f := new(FuncDecl)
-	f.initFrom(&name.node) // TODO(gri) is this the correct position for methods?
-
-	f.Recv = recv
-	f.Name = name
+	f.Name = p.name()
 	f.Type = p.funcType()
 	if gcCompat {
 		f.node = f.Type.node
@@ -484,7 +435,7 @@ func (p *parser) funcDecl() Decl {
 	// 	p.error("can only use //go:noescape with external func implementations")
 	// }
 
-	if recv == badRecv {
+	if badRecv {
 		return nil // TODO(gri) better solution
 	}
 	return f
@@ -553,7 +504,7 @@ func (p *parser) unaryExpr() Expr {
 			return x
 		}
 
-	case _Larrow:
+	case _Arrow:
 		// receive op (<-x) or receive-only channel (<-chan E)
 		p.next()
 
@@ -967,7 +918,7 @@ func (p *parser) tryType() Expr {
 		p.next()
 		return indirect(p.type_())
 
-	case _Larrow:
+	case _Arrow:
 		// recvchantype
 		p.next()
 		p.want(_Chan)
@@ -1013,7 +964,7 @@ func (p *parser) tryType() Expr {
 		p.next()
 		t := new(ChanType)
 		t.init(p)
-		if p.got(_Larrow) {
+		if p.got(_Arrow) {
 			t.Dir = SendOnly
 		}
 		t.Elem = p.chanElem()
@@ -1356,7 +1307,7 @@ func (p *parser) paramDecl() *Field {
 	case _Name:
 		f.Name = p.name()
 		switch p.tok {
-		case _Name, _Star, _Larrow, _Func, _Lbrack, _Chan, _Map, _Struct, _Interface, _Lparen:
+		case _Name, _Star, _Arrow, _Func, _Lbrack, _Chan, _Map, _Struct, _Interface, _Lparen:
 			// sym name_or_type
 			f.Type = p.type_()
 
@@ -1371,7 +1322,7 @@ func (p *parser) paramDecl() *Field {
 			f.Name = nil
 		}
 
-	case _Larrow, _Star, _Func, _Lbrack, _Chan, _Map, _Struct, _Interface, _Lparen:
+	case _Arrow, _Star, _Func, _Lbrack, _Chan, _Map, _Struct, _Interface, _Lparen:
 		// name_or_type
 		f.Type = p.type_()
 
@@ -1505,7 +1456,7 @@ func (p *parser) simpleStmt(lhs Expr, rangeOk bool) SimpleStmt {
 			p.next()
 			return p.newAssignStmt(op, lhs, ImplicitOne)
 
-		case _Larrow:
+		case _Arrow:
 			// lhs <- rhs
 			p.next()
 			s := new(SendStmt)
@@ -1856,24 +1807,19 @@ func (p *parser) commClause() *CommClause {
 	switch p.tok {
 	case _Case:
 		p.next()
-		lhs := p.exprList()
+		c.Comm = p.simpleStmt(nil, false)
 
-		if _, ok := lhs.(*ListExpr); !ok && p.tok == _Larrow {
-			// lhs <- x
-		} else {
-			// lhs
-			// lhs = <-x
-			// lhs := <-x
-			if p.tok == _Assign || p.tok == _Define {
-				// TODO(gri) check that lhs has at most 2 entries
-			} else if p.tok == _Colon {
-				// TODO(gri) check that lhs has at most 1 entry
-			} else {
-				panic("unimplemented")
-			}
-		}
-
-		c.Comm = p.simpleStmt(lhs, false)
+		// The syntax restricts the possible simple statements here to:
+		//
+		//     lhs <- x (send statement)
+		//     <-x
+		//     lhs = <-x
+		//     lhs := <-x
+		//
+		// All these (and more) are recognized by simpleStmt and invalid
+		// syntax trees are flagged later, during type checking.
+		// TODO(gri) eventually may want to restrict valid syntax trees
+		// here.
 
 	case _Default:
 		p.next()
@@ -1938,7 +1884,7 @@ func (p *parser) stmt() Stmt {
 
 	case _Literal, _Func, _Lparen, // operands
 		_Lbrack, _Struct, _Map, _Chan, _Interface, // composite types
-		_Larrow: // receive operator
+		_Arrow: // receive operator
 		return p.simpleStmt(nil, false)
 
 	case _For:

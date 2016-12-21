@@ -6,6 +6,7 @@ package ssa
 
 import (
 	"cmd/internal/obj"
+	"cmd/internal/obj/x86"
 	"testing"
 )
 
@@ -16,7 +17,7 @@ var Deadcode = deadcode
 var Copyelim = copyelim
 
 func testConfig(t testing.TB) *Config {
-	testCtxt := &obj.Link{}
+	testCtxt := &obj.Link{Arch: &x86.Linkamd64}
 	return NewConfig("amd64", DummyFrontend{t}, testCtxt, true)
 }
 
@@ -58,13 +59,16 @@ func (d DummyFrontend) SplitInt64(s LocalSlot) (LocalSlot, LocalSlot) {
 func (d DummyFrontend) SplitStruct(s LocalSlot, i int) LocalSlot {
 	return LocalSlot{s.N, s.Type.FieldType(i), s.Off + s.Type.FieldOff(i)}
 }
+func (d DummyFrontend) SplitArray(s LocalSlot) LocalSlot {
+	return LocalSlot{s.N, s.Type.ElemType(), s.Off}
+}
 func (DummyFrontend) Line(line int32) string {
 	return "unknown.go:0"
 }
 func (DummyFrontend) AllocFrame(f *Func) {
 }
 func (DummyFrontend) Syslook(s string) interface{} {
-	return nil
+	return DummySym(s)
 }
 
 func (d DummyFrontend) Logf(msg string, args ...interface{}) { d.t.Logf(msg, args...) }
@@ -95,3 +99,7 @@ func (d DummyFrontend) CanSSA(t Type) bool {
 	// There are no un-SSAable types in dummy land.
 	return true
 }
+
+type DummySym string
+
+func (s DummySym) String() string { return string(s) }

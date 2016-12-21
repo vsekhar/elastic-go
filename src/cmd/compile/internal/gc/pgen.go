@@ -279,7 +279,7 @@ func (s *ssaExport) AllocFrame(f *ssa.Func) {
 		if haspointers(n.Type) {
 			stkptrsize = Stksize
 		}
-		if Thearch.LinkArch.InFamily(sys.MIPS64, sys.ARM, sys.ARM64, sys.PPC64, sys.S390X) {
+		if Thearch.LinkArch.InFamily(sys.MIPS, sys.MIPS64, sys.ARM, sys.ARM64, sys.PPC64, sys.S390X) {
 			Stksize = Rnd(Stksize, int64(Widthptr))
 		}
 		if Stksize >= 1<<31 {
@@ -304,6 +304,11 @@ func compile(fn *Node) {
 		panicdivide = Sysfunc("panicdivide")
 		growslice = Sysfunc("growslice")
 		panicdottype = Sysfunc("panicdottype")
+		panicnildottype = Sysfunc("panicnildottype")
+		assertE2I = Sysfunc("assertE2I")
+		assertE2I2 = Sysfunc("assertE2I2")
+		assertI2I = Sysfunc("assertI2I")
+		assertI2I2 = Sysfunc("assertI2I2")
 	}
 
 	defer func(lno int32) {
@@ -375,6 +380,9 @@ func compile(fn *Node) {
 	if fn.Func.Wrapper {
 		ptxt.From3.Offset |= obj.WRAPPER
 	}
+	if fn.Func.NoFramePointer {
+		ptxt.From3.Offset |= obj.NOFRAME
+	}
 	if fn.Func.Needctxt {
 		ptxt.From3.Offset |= obj.NEEDCTXT
 	}
@@ -422,6 +430,8 @@ func compile(fn *Node) {
 			}
 			fallthrough
 		case PPARAM, PPARAMOUT:
+			// The symbol is excluded later from debugging info if its name begins ".autotmp_", but the type is still necessary.
+			// See bugs #17644 and #17830 and cmd/internal/dwarf/dwarf.go
 			p := Gins(obj.ATYPE, n, nil)
 			p.From.Sym = obj.Linklookup(Ctxt, n.Sym.Name, 0)
 			p.To.Type = obj.TYPE_MEM

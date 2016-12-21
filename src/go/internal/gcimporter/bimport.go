@@ -207,17 +207,47 @@ func (p *importer) pkg() *types.Package {
 	return pkg
 }
 
+// objTag returns the tag value for each object kind.
+// obj must not be a *types.Alias.
+func objTag(obj types.Object) int {
+	switch obj.(type) {
+	case *types.Const:
+		return constTag
+	case *types.TypeName:
+		return typeTag
+	case *types.Var:
+		return varTag
+	case *types.Func:
+		return funcTag
+	// Aliases are not exported multiple times, thus we should not see them here.
+	default:
+		errorf("unexpected object: %v (%T)", obj, obj) // panics
+		panic("unreachable")
+	}
+}
+
+func sameObj(a, b types.Object) bool {
+	// Because unnamed types are not canonicalized, we cannot simply compare types for
+	// (pointer) identity.
+	// Ideally we'd check equality of constant values as well, but this is good enough.
+	return objTag(a) == objTag(b) && types.Identical(a.Type(), b.Type())
+}
+
 func (p *importer) declare(obj types.Object) {
 	pkg := obj.Pkg()
 	if alt := pkg.Scope().Insert(obj); alt != nil {
-		// This could only trigger if we import a (non-type) object a second time.
-		// This should never happen because 1) we only import a package once; and
-		// b) we ignore compiler-specific export data which may contain functions
-		// whose inlined function bodies refer to other functions that were already
-		// imported.
-		// (See also the comment in cmd/compile/internal/gc/bimport.go importer.obj,
-		// switch case importing functions).
-		errorf("inconsistent import:\n\t%v\npreviously imported as:\n\t%v\n", alt, obj)
+		// This can only trigger if we import a (non-type) object a second time.
+		// Excluding aliases, this cannot happen because 1) we only import a package
+		// once; and b) we ignore compiler-specific export data which may contain
+		// functions whose inlined function bodies refer to other functions that
+		// were already imported.
+		// However, aliases require reexporting the original object, so we need
+		// to allow it (see also the comment in cmd/compile/internal/gc/bimport.go,
+		// method importer.obj, switch case importing functions).
+		// Note that the original itself cannot be an alias.
+		if !sameObj(obj, alt) {
+			errorf("inconsistent import:\n\t%v\npreviously imported as:\n\t%v\n", obj, alt)
+		}
 	}
 }
 
@@ -231,7 +261,7 @@ func (p *importer) obj(tag int) {
 		p.declare(types.NewConst(pos, pkg, name, typ, val))
 
 	case typeTag:
-		_ = p.typ(nil)
+		p.typ(nil)
 
 	case varTag:
 		pos := p.pos()
@@ -246,6 +276,19 @@ func (p *importer) obj(tag int) {
 		result, _ := p.paramList()
 		sig := types.NewSignature(nil, params, result, isddd)
 		p.declare(types.NewFunc(pos, pkg, name, sig))
+
+	case aliasTag:
+		pos := p.pos()
+		name := p.string()
+		var orig types.Object
+		if pkg, name := p.qualifiedName(); pkg != nil {
+			orig = pkg.Scope().Lookup(name)
+		}
+		// Alias-related code. Keep for now.
+		_ = pos
+		_ = name
+		_ = orig
+		// p.declare(types.NewAlias(pos, p.pkgList[0], name, orig))
 
 	default:
 		errorf("unexpected object tag %d", tag)
@@ -306,7 +349,9 @@ var (
 
 func (p *importer) qualifiedName() (pkg *types.Package, name string) {
 	name = p.string()
-	pkg = p.pkg()
+	if name != "" {
+		pkg = p.pkg()
+	}
 	return
 }
 
@@ -501,7 +546,7 @@ func (p *importer) typ(parent *types.Package) types.Type {
 		return t
 
 	default:
-		errorf("unexpected type tag %d", i)
+		errorf("unexpected type tag %d", i) // panics
 		panic("unreachable")
 	}
 }
@@ -652,7 +697,7 @@ func (p *importer) value() constant.Value {
 	case unknownTag:
 		return constant.MakeUnknown()
 	default:
-		errorf("unexpected value tag %d", tag)
+		errorf("unexpected value tag %d", tag) // panics
 		panic("unreachable")
 	}
 }
@@ -845,7 +890,11 @@ const (
 	fractionTag // not used by gc
 	complexTag
 	stringTag
+	nilTag     // only used by gc (appears in exported inlined function bodies)
 	unknownTag // not used by gc (only appears in packages with errors)
+
+	// Aliases
+	aliasTag
 )
 
 var predeclared = []types.Type{

@@ -104,10 +104,8 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 		racereleasemerge(unsafe.Pointer(&racecgosync))
 	}
 
-	/*
-	 * Lock g to m to ensure we stay on the same stack if we do a
-	 * cgo callback. In case of panic, unwindm calls endcgo.
-	 */
+	// Lock g to m to ensure we stay on the same stack if we do a
+	// cgo callback. In case of panic, unwindm calls endcgo.
 	lockOSThread()
 	mp := getg().m
 	mp.ncgocall++
@@ -116,20 +114,36 @@ func cgocall(fn, arg unsafe.Pointer) int32 {
 	// Reset traceback.
 	mp.cgoCallers[0] = 0
 
-	/*
-	 * Announce we are entering a system call
-	 * so that the scheduler knows to create another
-	 * M to run goroutines while we are in the
-	 * foreign code.
-	 *
-	 * The call to asmcgocall is guaranteed not to
-	 * split the stack and does not allocate memory,
-	 * so it is safe to call while "in a system call", outside
-	 * the $GOMAXPROCS accounting.
-	 */
+	// Announce we are entering a system call
+	// so that the scheduler knows to create another
+	// M to run goroutines while we are in the
+	// foreign code.
+	//
+	// The call to asmcgocall is guaranteed not to
+	// grow the stack and does not allocate memory,
+	// so it is safe to call while "in a system call", outside
+	// the $GOMAXPROCS accounting.
+	//
+	// fn may call back into Go code, in which case we'll exit the
+	// "system call", run the Go code (which may grow the stack),
+	// and then re-enter the "system call" reusing the PC and SP
+	// saved by entersyscall here.
 	entersyscall(0)
 	errno := asmcgocall(fn, arg)
 	exitsyscall(0)
+
+	// From the garbage collector's perspective, time can move
+	// backwards in the sequence above. If there's a callback into
+	// Go code, GC will see this function at the call to
+	// asmcgocall. When the Go call later returns to C, the
+	// syscall PC/SP is rolled back and the GC sees this function
+	// back at the call to entersyscall. Normally, fn and arg
+	// would be live at entersyscall and dead at asmcgocall, so if
+	// time moved backwards, GC would see these arguments as dead
+	// and then live. Prevent these undead arguments from crashing
+	// GC by forcing them to stay live across this time warp.
+	KeepAlive(fn)
+	KeepAlive(arg)
 
 	endcgo(mp)
 	return errno
@@ -272,6 +286,10 @@ func cgocallbackg1(ctxt uintptr) {
 		// On mips64x, stack frame is two words and there's a saved LR between
 		// SP and the stack frame and between the stack frame and the arguments.
 		cb = (*args)(unsafe.Pointer(sp + 4*sys.PtrSize))
+	case "mips", "mipsle":
+		// On mipsx, stack frame is two words and there's a saved LR between
+		// SP and the stack frame and between the stack frame and the arguments.
+		cb = (*args)(unsafe.Pointer(sp + 4*sys.PtrSize))
 	}
 
 	// Invoke callback.
@@ -309,7 +327,7 @@ func unwindm(restore *bool) {
 	switch GOARCH {
 	default:
 		throw("unwindm not implemented")
-	case "386", "amd64", "arm", "ppc64", "ppc64le", "mips64", "mips64le", "s390x":
+	case "386", "amd64", "arm", "ppc64", "ppc64le", "mips64", "mips64le", "s390x", "mips", "mipsle":
 		sched.sp = *(*uintptr)(unsafe.Pointer(sched.sp + sys.MinFrameSize))
 	case "arm64":
 		sched.sp = *(*uintptr)(unsafe.Pointer(sched.sp + 16))
@@ -569,7 +587,7 @@ func cgoCheckUnknownPointer(p unsafe.Pointer, msg string) (base, i uintptr) {
 		return
 	}
 
-	for datap := &firstmoduledata; datap != nil; datap = datap.next {
+	for _, datap := range activeModules() {
 		if cgoInRange(p, datap.data, datap.edata) || cgoInRange(p, datap.bss, datap.ebss) {
 			// We have no way to know the size of the object.
 			// We have to assume that it might contain a pointer.
@@ -596,7 +614,7 @@ func cgoIsGoPointer(p unsafe.Pointer) bool {
 		return true
 	}
 
-	for datap := &firstmoduledata; datap != nil; datap = datap.next {
+	for _, datap := range activeModules() {
 		if cgoInRange(p, datap.data, datap.edata) || cgoInRange(p, datap.bss, datap.ebss) {
 			return true
 		}

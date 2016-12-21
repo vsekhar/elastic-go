@@ -289,8 +289,11 @@ On Unix, the value is a colon-separated string.
 On Windows, the value is a semicolon-separated string.
 On Plan 9, the value is a list.
 
-GOPATH must be set to get, build and install packages outside the
-standard Go tree.
+If the environment variable is unset, GOPATH defaults
+to a subdirectory named "go" in the user's home directory
+($HOME/go on Unix, %USERPROFILE%\go on Windows),
+unless that directory holds a Go distribution.
+Run "go env GOPATH" to see the current GOPATH.
 
 Each directory listed in GOPATH must have a prescribed structure:
 
@@ -318,9 +321,9 @@ of DIR/bin. GOBIN must be an absolute path.
 
 Here's an example directory layout:
 
-    GOPATH=/home/user/gocode
+    GOPATH=/home/user/go
 
-    /home/user/gocode/
+    /home/user/go/
         src/
             foo/
                 bar/               (go code in package bar)
@@ -346,7 +349,7 @@ Code in or below a directory named "internal" is importable only
 by code in the directory tree rooted at the parent of "internal".
 Here's an extended version of the directory layout above:
 
-    /home/user/gocode/
+    /home/user/go/
         src/
             crash/
                 bang/              (go code in package bang)
@@ -384,7 +387,7 @@ Here's the example from the previous section,
 but with the "internal" directory renamed to "vendor"
 and a new foo/vendor/crash/bang directory added:
 
-    /home/user/gocode/
+    /home/user/go/
         src/
             crash/
                 bang/              (go code in package bang)
