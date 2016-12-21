@@ -590,6 +590,11 @@ are:
 		Build the listed main packages and everything they import into
 		executables. Packages not named main are ignored.
 
+	-buildmode=remote
+		Build the listed main packages and everything they import into
+		remote executables. Remote executables require a remote runtime
+		like that provided by 'go remote'.
+
 	-buildmode=pie
 		Build the listed main packages and everything they import into
 		position independent executables (PIE). Packages not named

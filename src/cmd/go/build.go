@@ -422,6 +422,18 @@ func buildModeInit() {
 		}
 		exeSuffix = ".so"
 		ldBuildmode = "plugin"
+	case "remote":
+		if gccgo {
+			fatalf("-buildmode=remote not supported with gccgo")
+		}
+		switch platform {
+		case "linux/amd64":
+			ldBuildmode = "exe"
+			// TODO(vsekhar): remove this
+			fatalf("-buildmode=remote not supported on %s\n", platform)
+		default:
+			fatalf("-buildmode=remote not supported on %s\n", platform)
+		}
 	default:
 		fatalf("buildmode=%s not supported", buildBuildmode)
 	}
