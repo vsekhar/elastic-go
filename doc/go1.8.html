@@ -93,7 +93,8 @@ On OpenBSD, Go now requires OpenBSD 5.9 or later. <!-- CL 34093 -->
 <p>
 The Plan 9 port's networking support is now much more complete
 and matches the behavior of Unix and Windows with respect to deadlines
-and cancelation.
+and cancelation. For Plan 9 kernel requirements, see the
+<a href="https://golang.org/wiki/Plan9">Plan 9 wiki page</a>.
 </p>
 
 <p>
@@ -391,6 +392,15 @@ version of gccgo.
   <code>%USERPROFILE%/go</code> on Windows.
 </p>
 
+<h3 id="go_get">Go get</h3>
+
+<p> <!-- CL 34818 -->
+  The “<code>go</code> <code>get</code>” command now always respects
+  HTTP proxy environment variables, regardless of whether
+  the <code style='white-space:nowrap'>-insecure</code> flag is used. In previous releases, the
+  <code style='white-space:nowrap'>-insecure</code> flag had the side effect of not using proxies.
+</p>
+
 <h3 id="go_bug">Go bug</h3>
 
 <p>
@@ -631,6 +641,13 @@ now implements the new
   <a href="/pkg/runtime/#SetMutexProfileFraction"><code>SetMutexProfileFraction</code></a>.
 </p>
 
+<p>
+  A known limitation for Go 1.8 is that the profile only reports contention for
+  <a href="/pkg/sync/#Mutex"><code>sync.Mutex</code></a>,
+  not 
+  <a href="/pkg/sync/#RWMutex"><code>sync.RWMutex</code></a>.
+</p>
+
 <h3 id="minor_library_changes">Minor changes to the library</h3>
 
 <p>
@@ -792,11 +809,6 @@ Optimizations and minor bug fixes are not listed.
 
 <dl id="crypto_x509"><dt><a href="/pkg/crypto/x509/">crypto/x509</a></dt>
   <dd>
-    <p> <!-- CL 30578 -->
-      <a href="/pkg/crypto/x509/#SystemCertPool"><code>SystemCertPool</code></a>
-      is now implemented on Windows.
-    </p>
-
     <p> <!-- CL 24743 -->
       PSS signatures are now supported.
     </p>
@@ -1601,9 +1613,9 @@ crypto/x509: return error for missing SerialNumber (CL 27238)
       June 31 and July 32.
     </p>
 
-    <p> <!-- CL 33029 -->
+    <p> <!-- CL 33029 --> <!-- CL 34816 -->
       The <code>tzdata</code> database has been updated to version
-      2016i for systems that don't already have a local time zone
+      2016j for systems that don't already have a local time zone
       database.
     </p>
 

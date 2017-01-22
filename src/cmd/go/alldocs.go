@@ -935,6 +935,8 @@
 // unless that directory holds a Go distribution.
 // Run "go env GOPATH" to see the current GOPATH.
 //
+// See https://golang.org/wiki/SettingGOPATH to set a custom GOPATH.
+//
 // Each directory listed in GOPATH must have a prescribed structure:
 //
 // The src directory holds source code.  The path below src
@@ -1474,7 +1476,7 @@
 // 	    text from Log and Logf calls even if the test succeeds.
 //
 // The following flags are also recognized by 'go test' and can be used to
-// profile the tests during execution::
+// profile the tests during execution:
 //
 // 	-benchmem
 // 	    Print memory allocation statistics for benchmarks.
@@ -1517,7 +1519,7 @@
 // 	    Writes test binary as -c would.
 //
 // 	-mutexprofilefraction n
-//  	    Sample 1 in n stack traces of goroutines holding a
+// 	    Sample 1 in n stack traces of goroutines holding a
 // 	    contended mutex.
 //
 // 	-outputdir directory
