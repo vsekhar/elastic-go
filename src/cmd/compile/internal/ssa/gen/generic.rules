@@ -68,6 +68,19 @@
 (Trunc64to32 (SignExt16to64 x)) -> (SignExt16to32 x)
 (Trunc64to32 (SignExt32to64 x)) -> x
 
+(ZeroExt8to16  (Const8  [c])) -> (Const16 [int64( uint8(c))])
+(ZeroExt8to32  (Const8  [c])) -> (Const32 [int64( uint8(c))])
+(ZeroExt8to64  (Const8  [c])) -> (Const64 [int64( uint8(c))])
+(ZeroExt16to32 (Const16 [c])) -> (Const32 [int64(uint16(c))])
+(ZeroExt16to64 (Const16 [c])) -> (Const64 [int64(uint16(c))])
+(ZeroExt32to64 (Const32 [c])) -> (Const64 [int64(uint32(c))])
+(SignExt8to16  (Const8  [c])) -> (Const16 [int64(  int8(c))])
+(SignExt8to32  (Const8  [c])) -> (Const32 [int64(  int8(c))])
+(SignExt8to64  (Const8  [c])) -> (Const64 [int64(  int8(c))])
+(SignExt16to32 (Const16 [c])) -> (Const32 [int64( int16(c))])
+(SignExt16to64 (Const16 [c])) -> (Const64 [int64( int16(c))])
+(SignExt32to64 (Const32 [c])) -> (Const64 [int64( int32(c))])
+
 // const negation is currently handled by frontend
 //(Neg8 (Const8 [c])) -> (Const8 [-c])
 //(Neg16 (Const16 [c])) -> (Const16 [-c])
@@ -650,6 +663,7 @@
 (NeqPtr (ConstNil) p) -> (IsNonNil p)
 (EqPtr p (ConstNil)) -> (Not (IsNonNil p))
 (EqPtr (ConstNil) p) -> (Not (IsNonNil p))
+(IsNonNil (ConstNil)) -> (ConstBool [0])
 
 // slice and interface comparisons
 // The frontend ensures that we can only compare against nil,
@@ -1009,11 +1023,11 @@
 	&& mem.Op == OpStaticCall
 	&& isSameSym(mem.Aux, "runtime.newobject")
 	&& c == config.ctxt.FixedFrameSize() + config.RegSize // offset of return value
-	&& warnRule(config.Debug_checknil() && int(v.Line) > 1, v, "removed nil check")
+	&& warnRule(config.Debug_checknil() && v.Pos.Line() > 1, v, "removed nil check")
 	-> (Invalid)
 (NilCheck (OffPtr (Load (OffPtr [c] (SP)) mem)) mem)
 	&& mem.Op == OpStaticCall
 	&& isSameSym(mem.Aux, "runtime.newobject")
 	&& c == config.ctxt.FixedFrameSize() + config.RegSize // offset of return value
-	&& warnRule(config.Debug_checknil() && int(v.Line) > 1, v, "removed nil check")
+	&& warnRule(config.Debug_checknil() && v.Pos.Line() > 1, v, "removed nil check")
 	-> (Invalid)

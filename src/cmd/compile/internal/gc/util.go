@@ -11,7 +11,7 @@ import (
 )
 
 func (n *Node) Line() string {
-	return Ctxt.LineHist.LineString(int(n.Lineno))
+	return linestr(n.Pos)
 }
 
 var atExitFuncs []func()
@@ -67,6 +67,9 @@ func startProfile() {
 				Fatalf("%v", err)
 			}
 		})
+	} else {
+		// Not doing memory profiling; disable it entirely.
+		runtime.MemProfileRate = 0
 	}
 	if traceprofile != "" && traceHandler != nil {
 		traceHandler(traceprofile)

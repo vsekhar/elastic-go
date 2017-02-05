@@ -30,9 +30,9 @@ const ptrSize = 4 << (^uintptr(0) >> 63) // unsafe.Sizeof(uintptr(0)) but an ide
 // the underlying Go value can be used concurrently for the equivalent
 // direct operations.
 //
-// Using == on two Values does not compare the underlying values
-// they represent, but rather the contents of the Value structs.
 // To compare two Values, compare the results of the Interface method.
+// Using == on two Values does not compare the underlying values
+// they represent.
 type Value struct {
 	// typ holds the type of the value represented by a Value.
 	typ *rtype
@@ -763,7 +763,7 @@ func (v Value) Field(i int) Value {
 	fl := v.flag&(flagStickyRO|flagIndir|flagAddr) | flag(typ.Kind())
 	// Using an unexported field forces flagRO.
 	if !field.name.isExported() {
-		if field.name.name() == "" {
+		if field.anon() {
 			fl |= flagEmbedRO
 		} else {
 			fl |= flagStickyRO
@@ -774,7 +774,7 @@ func (v Value) Field(i int) Value {
 	// In the former case, we want v.ptr + offset.
 	// In the latter case, we must have field.offset = 0,
 	// so v.ptr + field.offset is still okay.
-	ptr := unsafe.Pointer(uintptr(v.ptr) + field.offset)
+	ptr := unsafe.Pointer(uintptr(v.ptr) + field.offset())
 	return Value{typ, ptr, fl}
 }
 

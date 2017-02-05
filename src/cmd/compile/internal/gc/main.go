@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"cmd/compile/internal/ssa"
 	"cmd/internal/obj"
+	"cmd/internal/src"
 	"cmd/internal/sys"
 	"flag"
 	"fmt"
@@ -188,7 +189,7 @@ func Main() {
 	flag.BoolVar(&flag_race, "race", false, "enable race detector")
 	flag.BoolVar(&flag_remote, "remote", false, "compile a remote binary")
 	obj.Flagcount("s", "warn about composite literals that can be simplified", &Debug['s'])
-	flag.StringVar(&Ctxt.LineHist.TrimPathPrefix, "trimpath", "", "remove `prefix` from recorded source file paths")
+	flag.StringVar(&pathPrefix, "trimpath", "", "remove `prefix` from recorded source file paths")
 	flag.BoolVar(&safemode, "u", false, "reject unsafe code")
 	obj.Flagcount("v", "increase debug verbosity", &Debug['v'])
 	obj.Flagcount("w", "debug type checking", &Debug['w'])
@@ -218,6 +219,26 @@ func Main() {
 
 	if flag.NArg() < 1 {
 		usage()
+	}
+
+	if outfile == "" {
+		p := flag.Arg(0)
+		if i := strings.LastIndex(p, "/"); i >= 0 {
+			p = p[i+1:]
+		}
+		if runtime.GOOS == "windows" {
+			if i := strings.LastIndex(p, `\`); i >= 0 {
+				p = p[i+1:]
+			}
+		}
+		if i := strings.LastIndex(p, "."); i >= 0 {
+			p = p[:i]
+		}
+		suffix := ".o"
+		if writearchive {
+			suffix = ".a"
+		}
+		outfile = p + suffix
 	}
 
 	startProfile()
@@ -302,33 +323,15 @@ func Main() {
 	blockgen = 1
 	dclcontext = PEXTERN
 	nerrors = 0
-	lexlineno = 1
 
 	timings.Start("fe", "loadsys")
 	loadsys()
 
 	timings.Start("fe", "parse")
-	lexlineno0 := lexlineno
-	for _, infile = range flag.Args() {
-		linehistpush(infile)
-		block = 1
-		iota_ = -1000000
-		imported_unsafe = false
-		parseFile(infile)
-		if nsyntaxerrors != 0 {
-			errorexit()
-		}
-
-		// Instead of converting EOF into '\n' in getc and count it as an extra line
-		// for the line history to work, and which then has to be corrected elsewhere,
-		// just add a line here.
-		lexlineno++
-		linehistpop()
-	}
+	lines := parseFiles(flag.Args())
 	timings.Stop()
-	timings.AddEvent(int64(lexlineno-lexlineno0), "lines")
+	timings.AddEvent(int64(lines), "lines")
 
-	mkpackage(localpkg.Name) // final import not used checks
 	finishUniverse()
 
 	typecheckok = true
@@ -341,13 +344,16 @@ func Main() {
 	// Phase 1: const, type, and names and types of funcs.
 	//   This will gather all the information about types
 	//   and methods but doesn't depend on any of it.
+	//   We also defer type alias declarations until phase 2
+	//   to avoid cycles like #18640.
 	defercheckwidth()
 
 	// Don't use range--typecheck can add closures to xtop.
 	timings.Start("fe", "typecheck", "top1")
 	for i := 0; i < len(xtop); i++ {
-		if xtop[i].Op != ODCL && xtop[i].Op != OAS && xtop[i].Op != OAS2 {
-			xtop[i] = typecheck(xtop[i], Etop)
+		n := xtop[i]
+		if op := n.Op; op != ODCL && op != OAS && op != OAS2 && (op != ODCLTYPE || !n.Left.Name.Param.Alias) {
+			xtop[i] = typecheck(n, Etop)
 		}
 	}
 
@@ -357,8 +363,9 @@ func Main() {
 	// Don't use range--typecheck can add closures to xtop.
 	timings.Start("fe", "typecheck", "top2")
 	for i := 0; i < len(xtop); i++ {
-		if xtop[i].Op == ODCL || xtop[i].Op == OAS || xtop[i].Op == OAS2 {
-			xtop[i] = typecheck(xtop[i], Etop)
+		n := xtop[i]
+		if op := n.Op; op == ODCL || op == OAS || op == OAS2 || op == ODCLTYPE && n.Left.Name.Param.Alias {
+			xtop[i] = typecheck(n, Etop)
 		}
 	}
 	resumecheckwidth()
@@ -368,8 +375,9 @@ func Main() {
 	timings.Start("fe", "typecheck", "func")
 	var fcount int64
 	for i := 0; i < len(xtop); i++ {
-		if xtop[i].Op == ODCLFUNC || xtop[i].Op == OCLOSURE {
-			Curfn = xtop[i]
+		n := xtop[i]
+		if op := n.Op; op == ODCLFUNC || op == OCLOSURE {
+			Curfn = n
 			decldepth = 1
 			saveerrors()
 			typecheckslice(Curfn.Nbody.Slice(), Etop)
@@ -461,8 +469,9 @@ func Main() {
 	timings.Start("be", "compilefuncs")
 	fcount = 0
 	for i := 0; i < len(xtop); i++ {
-		if xtop[i].Op == ODCLFUNC {
-			funccompile(xtop[i])
+		n := xtop[i]
+		if n.Op == ODCLFUNC {
+			funccompile(n)
 			fcount++
 		}
 	}
@@ -671,7 +680,6 @@ func findpkg(name string) (file string, ok bool) {
 // but does not make them visible to user code.
 func loadsys() {
 	block = 1
-	iota_ = -1000000
 
 	importpkg = Runtimepkg
 	typecheckok = true
@@ -787,7 +795,8 @@ func importfile(f *Val, indent []byte) {
 	defer impf.Close()
 	imp := bufio.NewReader(impf)
 
-	if strings.HasSuffix(file, ".a") {
+	const pkgSuffix = ".a"
+	if strings.HasSuffix(file, pkgSuffix) {
 		if !skiptopkgdef(imp) {
 			yyerror("import %s: not a package file", file)
 			errorexit()
@@ -835,9 +844,9 @@ func importfile(f *Val, indent []byte) {
 		yyerror("cannot import unsafe package %q", importpkg.Path)
 	}
 
-	// assume files move (get installed)
-	// so don't record the full path.
-	linehistpragma(file[len(file)-len(path_)-2:]) // acts as #pragma lib
+	// assume files move (get installed) so don't record the full path
+	// (e.g., for file "/Users/foo/go/pkg/darwin_amd64/math.a" record "math.a")
+	Ctxt.AddImport(file[len(file)-len(path_)-len(pkgSuffix):])
 
 	// In the importfile, if we find:
 	// $$\n  (textual format): not supported anymore
@@ -880,7 +889,7 @@ func importfile(f *Val, indent []byte) {
 	}
 }
 
-func pkgnotused(lineno int32, path string, name string) {
+func pkgnotused(lineno src.XPos, path string, name string) {
 	// If the package was imported with a name other than the final
 	// import path element, show it explicitly in the error message.
 	// Note that this handles both renamed imports and imports of
@@ -908,54 +917,37 @@ func mkpackage(pkgname string) {
 		if pkgname != localpkg.Name {
 			yyerror("package %s; expected %s", pkgname, localpkg.Name)
 		}
-		for _, s := range localpkg.Syms {
-			if s.Def == nil {
-				continue
-			}
-			if s.Def.Op == OPACK {
-				// throw away top-level package name leftover
-				// from previous file.
-				// leave s->block set to cause redeclaration
-				// errors if a conflicting top-level name is
-				// introduced by a different file.
-				if !s.Def.Used && nsyntaxerrors == 0 {
-					pkgnotused(s.Def.Lineno, s.Def.Name.Pkg.Path, s.Name)
-				}
-				s.Def = nil
-				continue
-			}
-
-			if s.Def.Sym != s && s.Flags&SymAlias == 0 {
-				// throw away top-level name left over
-				// from previous import . "x"
-				if s.Def.Name != nil && s.Def.Name.Pack != nil && !s.Def.Name.Pack.Used && nsyntaxerrors == 0 {
-					pkgnotused(s.Def.Name.Pack.Lineno, s.Def.Name.Pack.Name.Pkg.Path, "")
-					s.Def.Name.Pack.Used = true
-				}
-
-				s.Def = nil
-				continue
-			}
-		}
 	}
+}
 
-	if outfile == "" {
-		p := infile
-		if i := strings.LastIndex(p, "/"); i >= 0 {
-			p = p[i+1:]
+func clearImports() {
+	for _, s := range localpkg.Syms {
+		if s.Def == nil {
+			continue
 		}
-		if runtime.GOOS == "windows" {
-			if i := strings.LastIndex(p, `\`); i >= 0 {
-				p = p[i+1:]
+		if s.Def.Op == OPACK {
+			// throw away top-level package name leftover
+			// from previous file.
+			// leave s->block set to cause redeclaration
+			// errors if a conflicting top-level name is
+			// introduced by a different file.
+			if !s.Def.Used && nsyntaxerrors == 0 {
+				pkgnotused(s.Def.Pos, s.Def.Name.Pkg.Path, s.Name)
 			}
+			s.Def = nil
+			continue
 		}
-		if i := strings.LastIndex(p, "."); i >= 0 {
-			p = p[:i]
+
+		if s.isAlias() {
+			// throw away top-level name left over
+			// from previous import . "x"
+			if s.Def.Name != nil && s.Def.Name.Pack != nil && !s.Def.Name.Pack.Used && nsyntaxerrors == 0 {
+				pkgnotused(s.Def.Name.Pack.Pos, s.Def.Name.Pack.Name.Pkg.Path, "")
+				s.Def.Name.Pack.Used = true
+			}
+
+			s.Def = nil
+			continue
 		}
-		suffix := ".o"
-		if writearchive {
-			suffix = ".a"
-		}
-		outfile = p + suffix
 	}
 }

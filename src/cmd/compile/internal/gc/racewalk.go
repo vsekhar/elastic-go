@@ -5,6 +5,7 @@
 package gc
 
 import (
+	"cmd/internal/src"
 	"fmt"
 	"strings"
 )
@@ -186,8 +187,7 @@ func instrumentnode(np **Node, init *Nodes, wr int, skip int) {
 		OPLUS,
 		OREAL,
 		OIMAG,
-		OCOM,
-		OSQRT:
+		OCOM:
 		instrumentnode(&n.Left, init, wr, 0)
 		goto ret
 
@@ -226,7 +226,6 @@ func instrumentnode(np **Node, init *Nodes, wr int, skip int) {
 
 	case OLSH,
 		ORSH,
-		OLROT,
 		OAND,
 		OANDNOT,
 		OOR,
@@ -495,7 +494,7 @@ func callinstr(np **Node, init *Nodes, wr int, skip int) bool {
 			*np = n
 		}
 
-		n = treecopy(n, 0)
+		n = treecopy(n, src.NoXPos)
 		makeaddable(n)
 		var f *Node
 		if flag_msan {

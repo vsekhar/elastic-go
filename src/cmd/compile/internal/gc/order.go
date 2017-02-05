@@ -5,6 +5,7 @@
 package gc
 
 import (
+	"cmd/internal/src"
 	"fmt"
 )
 
@@ -182,7 +183,23 @@ func isaddrokay(n *Node) bool {
 // Orderaddrtemp ensures that n is okay to pass by address to runtime routines.
 // If the original argument n is not okay, orderaddrtemp creates a tmp, emits
 // tmp = n, and then returns tmp.
+// The result of orderaddrtemp MUST be assigned back to n, e.g.
+// 	n.Left = orderaddrtemp(n.Left, order)
 func orderaddrtemp(n *Node, order *Order) *Node {
+	if consttype(n) >= 0 {
+		// TODO: expand this to all static composite literal nodes?
+		n = defaultlit(n, nil)
+		dowidth(n.Type)
+		vstat := staticname(n.Type)
+		vstat.Name.Readonly = true
+		var out []*Node
+		staticassign(vstat, n, &out)
+		if out != nil {
+			Fatalf("staticassign of const generated code: %+v", n)
+		}
+		vstat = typecheck(vstat, Erv)
+		return vstat
+	}
 	if isaddrokay(n) {
 		return n
 	}
@@ -510,7 +527,7 @@ func orderstmt(n *Node, order *Order) {
 
 		n.Left = orderexpr(n.Left, order, nil)
 		n.Left = ordersafeexpr(n.Left, order)
-		tmp1 := treecopy(n.Left, 0)
+		tmp1 := treecopy(n.Left, src.NoXPos)
 		if tmp1.Op == OINDEXMAP {
 			tmp1.Etype = 0 // now an rvalue not an lvalue
 		}

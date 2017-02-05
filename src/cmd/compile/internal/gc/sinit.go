@@ -258,7 +258,7 @@ func staticinit(n *Node, out *[]*Node) bool {
 		Fatalf("staticinit")
 	}
 
-	lineno = n.Lineno
+	lineno = n.Pos
 	l := n.Name.Defn.Left
 	r := n.Name.Defn.Right
 	return staticassign(l, r, out)
@@ -469,7 +469,7 @@ func staticassign(l *Node, r *Node, out *[]*Node) bool {
 	case OCLOSURE:
 		if hasemptycvars(r) {
 			if Debug_closure > 0 {
-				Warnl(r.Lineno, "closure converted to global")
+				Warnl(r.Pos, "closure converted to global")
 			}
 			// Closures with no captured variables are globals,
 			// so the assignment can be done at link time.
@@ -1349,22 +1349,7 @@ func isvaluelit(n *Node) bool {
 	return n.Op == OARRAYLIT || n.Op == OSTRUCTLIT
 }
 
-// gen_as_init attempts to emit static data for n and reports whether it succeeded.
-// If reportOnly is true, it does not emit static data and does not modify the AST.
-func gen_as_init(n *Node, reportOnly bool) bool {
-	success := genAsInitNoCheck(n, reportOnly)
-	if !success && n.IsStatic {
-		Dump("\ngen_as_init", n)
-		Fatalf("gen_as_init couldn't generate static data")
-	}
-	return success
-}
-
-func genAsInitNoCheck(n *Node, reportOnly bool) bool {
-	if !n.IsStatic {
-		return false
-	}
-
+func genAsInitNoCheck(n *Node) bool {
 	nr := n.Right
 	nl := n.Left
 	if nr == nil {
@@ -1412,25 +1397,21 @@ func genAsInitNoCheck(n *Node, reportOnly bool) bool {
 			return false
 		}
 
-		if !reportOnly {
-			nam.Xoffset += int64(array_array)
-			gdata(&nam, ptr, Widthptr)
+		nam.Xoffset += int64(array_array)
+		gdata(&nam, ptr, Widthptr)
 
-			nam.Xoffset += int64(array_nel) - int64(array_array)
-			var nod1 Node
-			Nodconst(&nod1, Types[TINT], nr.Type.NumElem())
-			gdata(&nam, &nod1, Widthint)
+		nam.Xoffset += int64(array_nel) - int64(array_array)
+		var nod1 Node
+		Nodconst(&nod1, Types[TINT], nr.Type.NumElem())
+		gdata(&nam, &nod1, Widthint)
 
-			nam.Xoffset += int64(array_cap) - int64(array_nel)
-			gdata(&nam, &nod1, Widthint)
-		}
+		nam.Xoffset += int64(array_cap) - int64(array_nel)
+		gdata(&nam, &nod1, Widthint)
 
 		return true
 
 	case OLITERAL:
-		if !reportOnly {
-			gdata(&nam, nr, int(nr.Type.Width))
-		}
+		gdata(&nam, nr, int(nr.Type.Width))
 		return true
 	}
 }

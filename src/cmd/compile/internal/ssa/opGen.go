@@ -1473,6 +1473,8 @@ const (
 	OpS390XMOVHZreg
 	OpS390XMOVWreg
 	OpS390XMOVWZreg
+	OpS390XMOVDreg
+	OpS390XMOVDnop
 	OpS390XMOVDconst
 	OpS390XCFDBRA
 	OpS390XCGDBRA
@@ -1670,10 +1672,6 @@ const (
 	OpRsh64Ux16
 	OpRsh64Ux32
 	OpRsh64Ux64
-	OpLrot8
-	OpLrot16
-	OpLrot32
-	OpLrot64
 	OpEq8
 	OpEq16
 	OpEq32
@@ -4075,9 +4073,10 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:    "DUFFZERO",
-		auxType: auxInt64,
-		argLen:  3,
+		name:           "DUFFZERO",
+		auxType:        auxInt64,
+		argLen:         3,
+		faultOnNilArg0: true,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 128}, // DI
@@ -4087,8 +4086,9 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:   "REPSTOSL",
-		argLen: 4,
+		name:           "REPSTOSL",
+		argLen:         4,
+		faultOnNilArg0: true,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 128}, // DI
@@ -4156,10 +4156,12 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:         "DUFFCOPY",
-		auxType:      auxInt64,
-		argLen:       3,
-		clobberFlags: true,
+		name:           "DUFFCOPY",
+		auxType:        auxInt64,
+		argLen:         3,
+		clobberFlags:   true,
+		faultOnNilArg0: true,
+		faultOnNilArg1: true,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 128}, // DI
@@ -4169,8 +4171,10 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:   "REPMOVSL",
-		argLen: 4,
+		name:           "REPMOVSL",
+		argLen:         4,
+		faultOnNilArg0: true,
+		faultOnNilArg1: true,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 128}, // DI
@@ -7066,10 +7070,11 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:         "DUFFZERO",
-		auxType:      auxInt64,
-		argLen:       3,
-		clobberFlags: true,
+		name:           "DUFFZERO",
+		auxType:        auxInt64,
+		argLen:         3,
+		clobberFlags:   true,
+		faultOnNilArg0: true,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 128},   // DI
@@ -7090,8 +7095,9 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:   "REPSTOSQ",
-		argLen: 4,
+		name:           "REPSTOSQ",
+		argLen:         4,
+		faultOnNilArg0: true,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 128}, // DI
@@ -7159,10 +7165,12 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:         "DUFFCOPY",
-		auxType:      auxInt64,
-		argLen:       3,
-		clobberFlags: true,
+		name:           "DUFFCOPY",
+		auxType:        auxInt64,
+		argLen:         3,
+		clobberFlags:   true,
+		faultOnNilArg0: true,
+		faultOnNilArg1: true,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 128}, // DI
@@ -7172,8 +7180,10 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:   "REPMOVSQ",
-		argLen: 4,
+		name:           "REPMOVSQ",
+		argLen:         4,
+		faultOnNilArg0: true,
+		faultOnNilArg1: true,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 128}, // DI
@@ -18571,6 +18581,32 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
+		name:   "MOVDreg",
+		argLen: 1,
+		asm:    s390x.AMOVD,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 54271}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R12 R14 SP
+			},
+			outputs: []outputInfo{
+				{0, 21503}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R12 R14
+			},
+		},
+	},
+	{
+		name:         "MOVDnop",
+		argLen:       1,
+		resultInArg0: true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 21503}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R12 R14
+			},
+			outputs: []outputInfo{
+				{0, 21503}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R12 R14
+			},
+		},
+	},
+	{
 		name:              "MOVDconst",
 		auxType:           auxInt64,
 		argLen:            0,
@@ -19718,10 +19754,12 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:         "LoweredMove",
-		auxType:      auxInt64,
-		argLen:       4,
-		clobberFlags: true,
+		name:           "LoweredMove",
+		auxType:        auxInt64,
+		argLen:         4,
+		clobberFlags:   true,
+		faultOnNilArg0: true,
+		faultOnNilArg1: true,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 2},     // R1
@@ -19732,10 +19770,11 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:         "LoweredZero",
-		auxType:      auxInt64,
-		argLen:       3,
-		clobberFlags: true,
+		name:           "LoweredZero",
+		auxType:        auxInt64,
+		argLen:         3,
+		clobberFlags:   true,
+		faultOnNilArg0: true,
 		reg: regInfo{
 			inputs: []inputInfo{
 				{0, 2},     // R1
@@ -20313,30 +20352,6 @@ var opcodeTable = [...]opInfo{
 	{
 		name:    "Rsh64Ux64",
 		argLen:  2,
-		generic: true,
-	},
-	{
-		name:    "Lrot8",
-		auxType: auxInt64,
-		argLen:  1,
-		generic: true,
-	},
-	{
-		name:    "Lrot16",
-		auxType: auxInt64,
-		argLen:  1,
-		generic: true,
-	},
-	{
-		name:    "Lrot32",
-		auxType: auxInt64,
-		argLen:  1,
-		generic: true,
-	},
-	{
-		name:    "Lrot64",
-		auxType: auxInt64,
-		argLen:  1,
 		generic: true,
 	},
 	{

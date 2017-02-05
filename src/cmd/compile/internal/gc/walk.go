@@ -49,11 +49,11 @@ func walk(fn *Node) {
 			if defn.Left.Used {
 				continue
 			}
-			lineno = defn.Left.Lineno
+			lineno = defn.Left.Pos
 			yyerror("%v declared and not used", ln.Sym)
 			defn.Left.Used = true // suppress repeats
 		} else {
-			lineno = ln.Lineno
+			lineno = ln.Pos
 			yyerror("%v declared and not used", ln.Sym)
 		}
 	}
@@ -231,7 +231,7 @@ func walkstmt(n *Node) *Node {
 			if prealloc[v] == nil {
 				prealloc[v] = callnew(v.Type)
 			}
-			nn := nod(OAS, v.Name.Heapaddr, prealloc[v])
+			nn := nod(OAS, v.Name.Param.Heapaddr, prealloc[v])
 			nn.Colas = true
 			nn = typecheck(nn, Etop)
 			return walkstmt(nn)
@@ -314,7 +314,7 @@ func walkstmt(n *Node) *Node {
 				}
 				if cl == PPARAMOUT {
 					if ln.isParamStackCopy() {
-						ln = walkexpr(typecheck(nod(OIND, ln.Name.Heapaddr, nil), Erv), nil)
+						ln = walkexpr(typecheck(nod(OIND, ln.Name.Param.Heapaddr, nil), Erv), nil)
 					}
 					rl = append(rl, ln)
 				}
@@ -463,7 +463,7 @@ func walkexpr(n *Node, init *Nodes) *Node {
 	}
 
 	if n.Op == ONAME && n.Class == PAUTOHEAP {
-		nn := nod(OIND, n.Name.Heapaddr, nil)
+		nn := nod(OIND, n.Name.Param.Heapaddr, nil)
 		nn = typecheck(nn, Erv)
 		nn = walkexpr(nn, init)
 		nn.Left.NonNil = true
@@ -551,8 +551,9 @@ opswitch:
 		OGE,
 		OGT,
 		OADD,
-		OCOMPLEX,
-		OLROT:
+		OOR,
+		OXOR,
+		OCOMPLEX:
 		if n.Op == OCOMPLEX && n.Left == nil && n.Right == nil {
 			n.Left = n.List.First()
 			n.Right = n.List.Second()
@@ -560,11 +561,6 @@ opswitch:
 
 		n.Left = walkexpr(n.Left, init)
 		n.Right = walkexpr(n.Right, init)
-
-	case OOR, OXOR:
-		n.Left = walkexpr(n.Left, init)
-		n.Right = walkexpr(n.Right, init)
-		n = walkrotate(n)
 
 	case OEQ, ONE:
 		n.Left = walkexpr(n.Left, init)
@@ -651,16 +647,6 @@ opswitch:
 
 		n.Left = walkexpr(n.Left, init)
 		walkexprlist(n.List.Slice(), init)
-
-		if n.Left.Op == ONAME && n.Left.Sym.Name == "Sqrt" &&
-			(n.Left.Sym.Pkg.Path == "math" || n.Left.Sym.Pkg == localpkg && myimportpath == "math") {
-			if Thearch.LinkArch.InFamily(sys.AMD64, sys.ARM, sys.ARM64, sys.MIPS, sys.PPC64, sys.S390X) {
-				n.Op = OSQRT
-				n.Left = n.List.First()
-				n.List.Set(nil)
-				break opswitch
-			}
-		}
 
 		ll := ascompatte(n.Op, n, n.Isddd, t.Params(), n.List.Slice(), 0, init)
 		n.List.Set(reorder1(ll))
@@ -903,20 +889,47 @@ opswitch:
 			n = l
 			break
 		}
-		// Optimize convT2{E,I} when T is not pointer-shaped.
-		// We make the interface by initializing a stack temporary to
-		// the value we want to put in the interface, then using the address of
-		// that stack temporary for the interface data word.
-		if !n.Left.Type.IsInterface() && n.Esc == EscNone && n.Left.Type.Width <= 1024 {
-			tmp := temp(n.Left.Type)
-			init.Append(typecheck(nod(OAS, tmp, n.Left), Etop))
+
+		if staticbytes == nil {
+			staticbytes = newname(Pkglookup("staticbytes", Runtimepkg))
+			staticbytes.Class = PEXTERN
+			staticbytes.Type = typArray(Types[TUINT8], 256)
+			zerobase = newname(Pkglookup("zerobase", Runtimepkg))
+			zerobase.Class = PEXTERN
+			zerobase.Type = Types[TUINTPTR]
+		}
+
+		// Optimize convT2{E,I} for many cases in which T is not pointer-shaped,
+		// by using an existing addressable value identical to n.Left
+		// or creating one on the stack.
+		var value *Node
+		switch {
+		case n.Left.Type.Size() == 0:
+			// n.Left is zero-sized. Use zerobase.
+			value = zerobase
+		case n.Left.Type.IsBoolean() || (n.Left.Type.Size() == 1 && n.Left.Type.IsInteger()):
+			// n.Left is a bool/byte. Use staticbytes[n.Left].
+			value = nod(OINDEX, staticbytes, byteindex(n.Left))
+			value.Bounded = true
+		case n.Left.Class == PEXTERN && n.Left.Name != nil && n.Left.Name.Readonly:
+			// n.Left is a readonly global; use it directly.
+			value = n.Left
+		case !n.Left.Type.IsInterface() && n.Esc == EscNone && n.Left.Type.Width <= 1024:
+			// n.Left does not escape. Use a stack temporary initialized to n.Left.
+			value = temp(n.Left.Type)
+			init.Append(typecheck(nod(OAS, value, n.Left), Etop))
+		}
+
+		if value != nil {
+			// Value is identical to n.Left.
+			// Construct the interface directly: {type/itab, &value}.
 			var t *Node
 			if n.Type.IsEmptyInterface() {
 				t = typename(n.Left.Type)
 			} else {
 				t = itabname(n.Left.Type, n.Type)
 			}
-			l := nod(OEFACE, t, typecheck(nod(OADDR, tmp, nil), Erv))
+			l := nod(OEFACE, t, typecheck(nod(OADDR, value, nil), Erv))
 			l.Type = n.Type
 			l.Typecheck = n.Typecheck
 			n = l
@@ -2137,7 +2150,7 @@ func needwritebarrier(l *Node, r *Node) bool {
 func applywritebarrier(n *Node) *Node {
 	if n.Left != nil && n.Right != nil && needwritebarrier(n.Left, n.Right) {
 		if Debug_wb > 1 {
-			Warnl(n.Lineno, "marking %v for barrier", n.Left)
+			Warnl(n.Pos, "marking %v for barrier", n.Left)
 		}
 		n.Op = OASWB
 		return n
@@ -2592,7 +2605,7 @@ func returnsfromheap(params *Type) []*Node {
 // Enter and Exit lists.
 func heapmoves() {
 	lno := lineno
-	lineno = Curfn.Lineno
+	lineno = Curfn.Pos
 	nn := paramstoheap(Curfn.Type.Recvs())
 	nn = append(nn, paramstoheap(Curfn.Type.Params())...)
 	nn = append(nn, paramstoheap(Curfn.Type.Results())...)
@@ -2636,6 +2649,19 @@ func conv(n *Node, t *Type) *Node {
 	n = nod(OCONV, n, nil)
 	n.Type = t
 	n = typecheck(n, Erv)
+	return n
+}
+
+// byteindex converts n, which is byte-sized, to a uint8.
+// We cannot use conv, because we allow converting bool to uint8 here,
+// which is forbidden in user code.
+func byteindex(n *Node) *Node {
+	if eqtype(n.Type, Types[TUINT8]) {
+		return n
+	}
+	n = nod(OCONV, n, nil)
+	n.Type = Types[TUINT8]
+	n.Typecheck = 1
 	return n
 }
 
@@ -3241,63 +3267,6 @@ func samecheap(a *Node, b *Node) bool {
 	return false
 }
 
-// The result of walkrotate MUST be assigned back to n, e.g.
-// 	n.Left = walkrotate(n.Left)
-func walkrotate(n *Node) *Node {
-	if Thearch.LinkArch.InFamily(sys.MIPS, sys.MIPS64, sys.PPC64) {
-		return n
-	}
-
-	// Want << | >> or >> | << or << ^ >> or >> ^ << on unsigned value.
-	l := n.Left
-
-	r := n.Right
-	if (n.Op != OOR && n.Op != OXOR) || (l.Op != OLSH && l.Op != ORSH) || (r.Op != OLSH && r.Op != ORSH) || n.Type == nil || n.Type.IsSigned() || l.Op == r.Op {
-		return n
-	}
-
-	// Want same, side effect-free expression on lhs of both shifts.
-	if !samecheap(l.Left, r.Left) {
-		return n
-	}
-
-	// Constants adding to width?
-	w := int(l.Type.Width * 8)
-
-	if Thearch.LinkArch.Family == sys.S390X && w != 32 && w != 64 {
-		// only supports 32-bit and 64-bit rotates
-		return n
-	}
-
-	if smallintconst(l.Right) && smallintconst(r.Right) {
-		sl := int(l.Right.Int64())
-		if sl >= 0 {
-			sr := int(r.Right.Int64())
-			if sr >= 0 && sl+sr == w {
-				// Rewrite left shift half to left rotate.
-				if l.Op == OLSH {
-					n = l
-				} else {
-					n = r
-				}
-				n.Op = OLROT
-
-				// Remove rotate 0 and rotate w.
-				s := int(n.Right.Int64())
-
-				if s == 0 || s == w {
-					n = n.Left
-				}
-				return n
-			}
-		}
-		return n
-	}
-
-	// TODO: Could allow s and 32-s if s is bounded (maybe s&31 and 32-s&31).
-	return n
-}
-
 // isIntOrdering reports whether n is a <, ≤, >, or ≥ ordering between integers.
 func (n *Node) isIntOrdering() bool {
 	switch n.Op {
@@ -3418,7 +3387,7 @@ func walkinrange(n *Node, init *Nodes) *Node {
 		opr = brcom(opr)
 	}
 	cmp := nod(opr, lhs, rhs)
-	cmp.Lineno = n.Lineno
+	cmp.Pos = n.Pos
 	cmp = addinit(cmp, l.Ninit.Slice())
 	cmp = addinit(cmp, r.Ninit.Slice())
 	// Typecheck the AST rooted at cmp...
