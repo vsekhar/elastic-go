@@ -428,8 +428,6 @@ func buildModeInit() {
 		switch platform {
 		case "linux/amd64":
 			ldBuildmode = "exe"
-			// TODO(vsekhar): remove this
-			fatalf("-buildmode=remote not supported on %s\n", platform)
 		default:
 			fatalf("-buildmode=remote not supported on %s\n", platform)
 		}
@@ -2389,6 +2387,11 @@ func (gcToolchain) gc(b *builder, p *Package, archive, obj string, asmhdr bool, 
 	}
 	if p.buildID != "" {
 		gcargs = append(gcargs, "-buildid", p.buildID)
+	}
+
+	// The compiler needs to determine and rewrite accesses to remote variables.
+	if buildBuildmode == "remote" {
+		gcargs = append(gcargs, "-remote")
 	}
 
 	for _, path := range p.Imports {

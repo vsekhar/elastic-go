@@ -186,6 +186,7 @@ func Main() {
 	flag.BoolVar(&writearchive, "pack", false, "write package file instead of object file")
 	obj.Flagcount("r", "debug generated wrappers", &Debug['r'])
 	flag.BoolVar(&flag_race, "race", false, "enable race detector")
+	flag.BoolVar(&flag_remote, "remote", false, "compile a remote binary")
 	obj.Flagcount("s", "warn about composite literals that can be simplified", &Debug['s'])
 	flag.StringVar(&Ctxt.LineHist.TrimPathPrefix, "trimpath", "", "remove `prefix` from recorded source file paths")
 	flag.BoolVar(&safemode, "u", false, "reject unsafe code")
