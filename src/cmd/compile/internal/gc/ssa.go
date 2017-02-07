@@ -250,7 +250,7 @@ type state struct {
 }
 
 type funcLine struct {
-	f    *Node
+	f    *obj.LSym
 	line src.XPos
 }
 
@@ -794,7 +794,7 @@ func (s *state) stmt(n *Node) {
 		s.stmtList(n.List)
 		b := s.exit()
 		b.Kind = ssa.BlockRetJmp // override BlockRet
-		b.Aux = n.Left.Sym
+		b.Aux = Linksym(n.Left.Sym)
 
 	case OCONTINUE, OBREAK:
 		var op string
@@ -3004,7 +3004,7 @@ func (s *state) call(n *Node, k callKind) *ssa.Value {
 	case codeptr != nil:
 		call = s.newValue2(ssa.OpInterCall, ssa.TypeMem, codeptr, s.mem())
 	case sym != nil:
-		call = s.newValue1A(ssa.OpStaticCall, ssa.TypeMem, sym, s.mem())
+		call = s.newValue1A(ssa.OpStaticCall, ssa.TypeMem, Linksym(sym), s.mem())
 	default:
 		Fatalf("bad call type %v %v", n.Op, n)
 	}
@@ -3303,7 +3303,7 @@ func (s *state) sliceBoundsCheck(idx, len *ssa.Value) {
 }
 
 // If cmp (a bool) is false, panic using the given function.
-func (s *state) check(cmp *ssa.Value, fn *Node) {
+func (s *state) check(cmp *ssa.Value, fn *obj.LSym) {
 	b := s.endBlock()
 	b.Kind = ssa.BlockIf
 	b.SetControl(cmp)
@@ -3344,7 +3344,7 @@ func (s *state) intDivide(n *Node, a, b *ssa.Value) *ssa.Value {
 // Returns a slice of results of the given result types.
 // The call is added to the end of the current block.
 // If returns is false, the block is marked as an exit block.
-func (s *state) rtcall(fn *Node, returns bool, results []*Type, args ...*ssa.Value) []*ssa.Value {
+func (s *state) rtcall(fn *obj.LSym, returns bool, results []*Type, args ...*ssa.Value) []*ssa.Value {
 	// Write args to the stack
 	off := Ctxt.FixedFrameSize()
 	for _, arg := range args {
@@ -3365,7 +3365,7 @@ func (s *state) rtcall(fn *Node, returns bool, results []*Type, args ...*ssa.Val
 	}
 
 	// Issue call
-	call := s.newValue1A(ssa.OpStaticCall, ssa.TypeMem, fn.Sym, s.mem())
+	call := s.newValue1A(ssa.OpStaticCall, ssa.TypeMem, fn, s.mem())
 	s.vars[&memVar] = call
 
 	if !returns {
@@ -4610,7 +4610,7 @@ func sizeAlignAuxInt(t *Type) int64 {
 
 // extendIndex extends v to a full int width.
 // panic using the given function if v does not fit in an int (only on 32-bit archs).
-func (s *state) extendIndex(v *ssa.Value, panicfn *Node) *ssa.Value {
+func (s *state) extendIndex(v *ssa.Value, panicfn *obj.LSym) *ssa.Value {
 	size := v.Type.Size()
 	if size == s.config.IntSize {
 		return v
@@ -4981,8 +4981,8 @@ func (e *ssaExport) Debug_wb() bool {
 	return Debug_wb != 0
 }
 
-func (e *ssaExport) Syslook(name string) interface{} {
-	return syslook(name).Sym
+func (e *ssaExport) Syslook(name string) *obj.LSym {
+	return Linksym(syslook(name).Sym)
 }
 
 func (n *Node) Typ() ssa.Type {
