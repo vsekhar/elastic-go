@@ -256,6 +256,9 @@ func Main() {
 	} else if flag_race || flag_msan {
 		instrumenting = true
 	}
+	if flag_remote && !pure_go {
+		log.Fatal("-remote does not support cgo or partial compilation")
+	}
 
 	// parse -d argument
 	if debugstr != "" {
@@ -337,6 +340,10 @@ func Main() {
 	typecheckok = true
 	if Debug['f'] != 0 {
 		frame(1)
+	}
+
+	if _, ok := pkgMap["main"]; !ok && flag_remote {
+		log.Fatal("-remote can only be used when compiling pkg main")
 	}
 
 	// Process top-level declarations in phases.

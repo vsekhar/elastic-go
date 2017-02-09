@@ -600,7 +600,7 @@ are:
 	-buildmode=remote
 		Build the listed main packages and everything they import into
 		remote executables. Remote executables require a remote runtime
-		like that provided by 'go remote'.
+		like that provided by 'go remote' (implies -complete).
 
 	-buildmode=pie
 		Build the listed main packages and everything they import into
