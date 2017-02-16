@@ -433,17 +433,13 @@ func (t Time) String() string {
 
 	// Format monotonic clock reading as m=±ddd.nnnnnnnnn.
 	if t.wall&hasMonotonic != 0 {
-		m2 := t.ext
-		m1, m2 := m2/1e9, m2%1e9
-		if m2 < 0 {
-			m2 += 1e9
-			m1--
-		}
+		m2 := uint64(t.ext)
 		sign := byte('+')
-		if m1 < 0 {
+		if t.ext < 0 {
 			sign = '-'
-			m1 = -m1
+			m2 = -m2
 		}
+		m1, m2 := m2/1e9, m2%1e9
 		m0, m1 := m1/1e9, m1%1e9
 		var buf []byte
 		buf = append(buf, " m="...)
@@ -757,11 +753,6 @@ func skip(value, prefix string) (string, error) {
 // to a time zone used by the current location (Local), then Parse uses that
 // location and zone in the returned time. Otherwise it records the time as
 // being in a fabricated location with time fixed at the given zone offset.
-//
-// No checking is done that the day of the month is within the month's
-// valid dates; any one- or two-digit value is accepted. For example
-// February 31 and even February 99 are valid dates, specifying dates
-// in March and May. This behavior is consistent with time.Date.
 //
 // When parsing a time with a zone abbreviation like MST, if the zone abbreviation
 // has a defined offset in the current location, then that offset is used.

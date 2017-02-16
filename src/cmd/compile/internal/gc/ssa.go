@@ -120,19 +120,11 @@ func buildssa(fn *Node) *ssa.Func {
 		}
 	}
 
-	// Populate arguments.
+	// Populate SSAable arguments.
 	for _, n := range fn.Func.Dcl {
-		if n.Class != PPARAM {
-			continue
+		if n.Class == PPARAM && s.canSSA(n) {
+			s.vars[n] = s.newValue0A(ssa.OpArg, n.Type, n)
 		}
-		var v *ssa.Value
-		if s.canSSA(n) {
-			v = s.newValue0A(ssa.OpArg, n.Type, n)
-		} else {
-			// Not SSAable. Load it.
-			v = s.newValue2(ssa.OpLoad, n.Type, s.decladdrs[n], s.startmem)
-		}
-		s.vars[n] = v
 	}
 
 	// Convert the AST-based IR to the SSA-based IR
@@ -641,7 +633,7 @@ func (s *state) stmt(n *Node) {
 		b := s.endBlock()
 		b.AddEdgeTo(lab.target)
 
-	case OAS, OASWB:
+	case OAS:
 		// Generate static data rather than code, if possible.
 		if n.IsStatic {
 			if !genAsInitNoCheck(n) {
@@ -704,7 +696,7 @@ func (s *state) stmt(n *Node) {
 		}
 		var r *ssa.Value
 		var isVolatile bool
-		needwb := n.Op == OASWB
+		needwb := n.Right != nil && needwritebarrier(n.Left, n.Right)
 		deref := !canSSAType(t)
 		if deref {
 			if rhs == nil {
@@ -727,6 +719,9 @@ func (s *state) stmt(n *Node) {
 			// for ODOTTYPE and ORECV also.
 			// They get similar wb-removal treatment in walk.go:OAS.
 			needwb = true
+		}
+		if needwb && Debug_wb > 1 {
+			Warnl(n.Pos, "marking %v for barrier", n.Left)
 		}
 
 		var skip skipMask
@@ -1411,15 +1406,6 @@ func (s *state) ssaShiftOp(op Op, t *Type, u *Type) ssa.Op {
 	return x
 }
 
-func (s *state) ssaRotateOp(op Op, t *Type) ssa.Op {
-	etype1 := s.concreteEtype(t)
-	x, ok := opToSSA[opAndType{op, etype1}]
-	if !ok {
-		s.Fatalf("unhandled rotate op %v etype=%s", op, etype1)
-	}
-	return x
-}
-
 // expr converts the expression n to ssa, adds it to s and returns the ssa result.
 func (s *state) expr(n *Node) *ssa.Value {
 	if !(n.Op == ONAME || n.Op == OLITERAL && n.Sym != nil) {
@@ -1442,12 +1428,12 @@ func (s *state) expr(n *Node) *ssa.Value {
 		len := s.newValue1(ssa.OpStringLen, Types[TINT], str)
 		return s.newValue3(ssa.OpSliceMake, n.Type, ptr, len, len)
 	case OCFUNC:
-		aux := s.lookupSymbol(n, &ssa.ExternSymbol{Typ: n.Type, Sym: n.Left.Sym})
+		aux := s.lookupSymbol(n, &ssa.ExternSymbol{Typ: n.Type, Sym: Linksym(n.Left.Sym)})
 		return s.entryNewValue1A(ssa.OpAddr, n.Type, aux, s.sb)
 	case ONAME:
 		if n.Class == PFUNC {
 			// "value" of a function is the address of the function's closure
-			sym := funcsym(n.Sym)
+			sym := Linksym(funcsym(n.Sym))
 			aux := &ssa.ExternSymbol{Typ: n.Type, Sym: sym}
 			return s.entryNewValue1A(ssa.OpAddr, ptrto(n.Type), aux, s.sb)
 		}
@@ -1965,6 +1951,15 @@ func (s *state) expr(n *Node) *ssa.Value {
 			v := s.expr(n.Left)
 			return s.newValue1I(ssa.OpStructSelect, n.Type, int64(fieldIdx(n)), v)
 		}
+		if n.Left.Op == OSTRUCTLIT {
+			// All literals with nonzero fields have already been
+			// rewritten during walk. Any that remain are just T{}
+			// or equivalents. Use the zero value.
+			if !iszero(n.Left) {
+				Fatalf("literal with nonzero value in SSA: %v", n.Left)
+			}
+			return s.zeroVal(n.Type)
+		}
 		p, _ := s.addr(n, false)
 		return s.newValue2(ssa.OpLoad, n.Type, p, s.mem())
 
@@ -2106,6 +2101,15 @@ func (s *state) expr(n *Node) *ssa.Value {
 	case OAPPEND:
 		return s.append(n, false)
 
+	case OSTRUCTLIT, OARRAYLIT:
+		// All literals with nonzero fields have already been
+		// rewritten during walk. Any that remain are just T{}
+		// or equivalents. Use the zero value.
+		if !iszero(n) {
+			Fatalf("literal with nonzero value in SSA: %v", n)
+		}
+		return s.zeroVal(n.Type)
+
 	default:
 		s.Fatalf("unhandled expr %v", n.Op)
 		return nil
@@ -2196,7 +2200,7 @@ func (s *state) append(n *Node, inplace bool) *ssa.Value {
 
 	// Call growslice
 	s.startBlock(grow)
-	taddr := s.newValue1A(ssa.OpAddr, Types[TUINTPTR], &ssa.ExternSymbol{Typ: Types[TUINTPTR], Sym: typenamesym(n.Type.Elem())}, s.sb)
+	taddr := s.newValue1A(ssa.OpAddr, Types[TUINTPTR], &ssa.ExternSymbol{Typ: Types[TUINTPTR], Sym: Linksym(typenamesym(n.Type.Elem()))}, s.sb)
 
 	r := s.rtcall(growslice, true, []*Type{pt, Types[TINT], Types[TINT]}, taddr, p, l, c, nl)
 
@@ -3080,7 +3084,7 @@ func (s *state) addr(n *Node, bounded bool) (*ssa.Value, bool) {
 		switch n.Class {
 		case PEXTERN:
 			// global variable
-			aux := s.lookupSymbol(n, &ssa.ExternSymbol{Typ: n.Type, Sym: n.Sym})
+			aux := s.lookupSymbol(n, &ssa.ExternSymbol{Typ: n.Type, Sym: Linksym(n.Sym)})
 			v := s.entryNewValue1A(ssa.OpAddr, t, aux, s.sb)
 			// TODO: Make OpAddr use AuxInt as well as Aux.
 			if n.Xoffset != 0 {
@@ -3436,7 +3440,7 @@ func (s *state) insertWBmove(t *Type, left, right *ssa.Value, line src.XPos, rig
 		}
 		val = s.newValue3I(op, ssa.TypeMem, sizeAlignAuxInt(t), left, right, s.mem())
 	}
-	val.Aux = &ssa.ExternSymbol{Typ: Types[TUINTPTR], Sym: typenamesym(t)}
+	val.Aux = &ssa.ExternSymbol{Typ: Types[TUINTPTR], Sym: Linksym(typenamesym(t))}
 	s.vars[&memVar] = val
 
 	// WB ops will be expanded to branches at writebarrier phase.
@@ -4001,48 +4005,6 @@ func (s *state) floatToUint(cvttab *f2uCvtTab, n *Node, x *ssa.Value, ft, tt *Ty
 	return s.variable(n, n.Type)
 }
 
-// ifaceType returns the value for the word containing the type.
-// t is the type of the interface expression.
-// v is the corresponding value.
-func (s *state) ifaceType(t *Type, v *ssa.Value) *ssa.Value {
-	byteptr := ptrto(Types[TUINT8]) // type used in runtime prototypes for runtime type (*byte)
-
-	if t.IsEmptyInterface() {
-		// Have eface. The type is the first word in the struct.
-		return s.newValue1(ssa.OpITab, byteptr, v)
-	}
-
-	// Have iface.
-	// The first word in the struct is the itab.
-	// If the itab is nil, return 0.
-	// Otherwise, the second word in the itab is the type.
-
-	tab := s.newValue1(ssa.OpITab, byteptr, v)
-	s.vars[&typVar] = tab
-	isnonnil := s.newValue2(ssa.OpNeqPtr, Types[TBOOL], tab, s.constNil(byteptr))
-	b := s.endBlock()
-	b.Kind = ssa.BlockIf
-	b.SetControl(isnonnil)
-	b.Likely = ssa.BranchLikely
-
-	bLoad := s.f.NewBlock(ssa.BlockPlain)
-	bEnd := s.f.NewBlock(ssa.BlockPlain)
-
-	b.AddEdgeTo(bLoad)
-	b.AddEdgeTo(bEnd)
-	bLoad.AddEdgeTo(bEnd)
-
-	s.startBlock(bLoad)
-	off := s.newValue1I(ssa.OpOffPtr, byteptr, int64(Widthptr), tab)
-	s.vars[&typVar] = s.newValue2(ssa.OpLoad, byteptr, off, s.mem())
-	s.endBlock()
-
-	s.startBlock(bEnd)
-	typ := s.variable(&typVar, byteptr)
-	delete(s.vars, &typVar)
-	return typ
-}
-
 // dottype generates SSA for a type assertion node.
 // commaok indicates whether to panic or return a bool.
 // If commaok is false, resok will be nil.
@@ -4145,10 +4107,17 @@ func (s *state) dottype(n *Node, commaok bool) (res, resok *ssa.Value) {
 
 	// Converting to a concrete type.
 	direct := isdirectiface(n.Type)
-	typ := s.ifaceType(n.Left.Type, iface) // actual concrete type of input interface
-
+	itab := s.newValue1(ssa.OpITab, byteptr, iface) // type word of interface
 	if Debug_typeassert > 0 {
 		Warnl(n.Pos, "type assertion inlined")
+	}
+	var targetITab *ssa.Value
+	if n.Left.Type.IsEmptyInterface() {
+		// Looking for pointer to target type.
+		targetITab = target
+	} else {
+		// Looking for pointer to itab for target type and source interface.
+		targetITab = s.expr(itabname(n.Type, n.Left.Type))
 	}
 
 	var tmp *Node       // temporary for use with large types
@@ -4161,9 +4130,7 @@ func (s *state) dottype(n *Node, commaok bool) (res, resok *ssa.Value) {
 		s.vars[&memVar] = s.newValue1A(ssa.OpVarDef, ssa.TypeMem, tmp, s.mem())
 	}
 
-	// TODO:  If we have a nonempty interface and its itab field is nil,
-	// then this test is redundant and ifaceType should just branch directly to bFail.
-	cond := s.newValue2(ssa.OpEqPtr, Types[TBOOL], typ, target)
+	cond := s.newValue2(ssa.OpEqPtr, Types[TBOOL], itab, targetITab)
 	b := s.endBlock()
 	b.Kind = ssa.BlockIf
 	b.SetControl(cond)
@@ -4177,8 +4144,12 @@ func (s *state) dottype(n *Node, commaok bool) (res, resok *ssa.Value) {
 	if !commaok {
 		// on failure, panic by calling panicdottype
 		s.startBlock(bFail)
-		taddr := s.newValue1A(ssa.OpAddr, byteptr, &ssa.ExternSymbol{Typ: byteptr, Sym: typenamesym(n.Left.Type)}, s.sb)
-		s.rtcall(panicdottype, false, nil, typ, target, taddr)
+		taddr := s.newValue1A(ssa.OpAddr, byteptr, &ssa.ExternSymbol{Typ: byteptr, Sym: Linksym(typenamesym(n.Left.Type))}, s.sb)
+		if n.Left.Type.IsEmptyInterface() {
+			s.rtcall(panicdottypeE, false, nil, itab, target, taddr)
+		} else {
+			s.rtcall(panicdottypeI, false, nil, itab, target, taddr)
+		}
 
 		// on success, return data from interface
 		s.startBlock(bOk)
@@ -4240,60 +4211,87 @@ func (s *state) dottype(n *Node, commaok bool) (res, resok *ssa.Value) {
 
 // checkgoto checks that a goto from from to to does not
 // jump into a block or jump over variable declarations.
-// It is a copy of checkgoto in the pre-SSA backend,
-// modified only for line number handling.
-// TODO: document how this works and why it is designed the way it is.
 func (s *state) checkgoto(from *Node, to *Node) {
+	if from.Op != OGOTO || to.Op != OLABEL {
+		Fatalf("bad from/to in checkgoto: %v -> %v", from, to)
+	}
+
+	// from and to's Sym fields record dclstack's value at their
+	// position, which implicitly encodes their block nesting
+	// level and variable declaration position within that block.
+	//
+	// For valid gotos, to.Sym will be a tail of from.Sym.
+	// Otherwise, any link in to.Sym not also in from.Sym
+	// indicates a block/declaration being jumped into/over.
+	//
+	// TODO(mdempsky): We should only complain about jumping over
+	// variable declarations, but currently we reject type and
+	// constant declarations too (#8042).
+
 	if from.Sym == to.Sym {
 		return
 	}
 
-	nf := 0
-	for fs := from.Sym; fs != nil; fs = fs.Link {
-		nf++
-	}
-	nt := 0
-	for fs := to.Sym; fs != nil; fs = fs.Link {
-		nt++
-	}
+	nf := dcldepth(from.Sym)
+	nt := dcldepth(to.Sym)
+
+	// Unwind from.Sym so it's no longer than to.Sym. It's okay to
+	// jump out of blocks or backwards past variable declarations.
 	fs := from.Sym
 	for ; nf > nt; nf-- {
 		fs = fs.Link
 	}
-	if fs != to.Sym {
-		// decide what to complain about.
-		// prefer to complain about 'into block' over declarations,
-		// so scan backward to find most recent block or else dcl.
-		var block *Sym
 
-		var dcl *Sym
-		ts := to.Sym
-		for ; nt > nf; nt-- {
-			if ts.Pkg == nil {
-				block = ts
-			} else {
-				dcl = ts
-			}
-			ts = ts.Link
-		}
-
-		for ts != fs {
-			if ts.Pkg == nil {
-				block = ts
-			} else {
-				dcl = ts
-			}
-			ts = ts.Link
-			fs = fs.Link
-		}
-
-		lno := from.Left.Pos
-		if block != nil {
-			yyerrorl(lno, "goto %v jumps into block starting at %v", from.Left.Sym, linestr(block.Lastlineno))
-		} else {
-			yyerrorl(lno, "goto %v jumps over declaration of %v at %v", from.Left.Sym, dcl, linestr(dcl.Lastlineno))
-		}
+	if fs == to.Sym {
+		return
 	}
+
+	// Decide what to complain about. Unwind to.Sym until where it
+	// forked from from.Sym, and keep track of the innermost block
+	// and declaration we jumped into/over.
+	var block *Sym
+	var dcl *Sym
+
+	// If to.Sym is longer, unwind until it's the same length.
+	ts := to.Sym
+	for ; nt > nf; nt-- {
+		if ts.Pkg == nil {
+			block = ts
+		} else {
+			dcl = ts
+		}
+		ts = ts.Link
+	}
+
+	// Same length; unwind until we find their common ancestor.
+	for ts != fs {
+		if ts.Pkg == nil {
+			block = ts
+		} else {
+			dcl = ts
+		}
+		ts = ts.Link
+		fs = fs.Link
+	}
+
+	// Prefer to complain about 'into block' over declarations.
+	lno := from.Left.Pos
+	if block != nil {
+		yyerrorl(lno, "goto %v jumps into block starting at %v", from.Left.Sym, linestr(block.Lastlineno))
+	} else {
+		yyerrorl(lno, "goto %v jumps over declaration of %v at %v", from.Left.Sym, dcl, linestr(dcl.Lastlineno))
+	}
+}
+
+// dcldepth returns the declaration depth for a dclstack Sym; that is,
+// the sum of the block nesting level and the number of declarations
+// in scope.
+func dcldepth(s *Sym) int {
+	n := 0
+	for ; s != nil; s = s.Link {
+		n++
+	}
+	return n
 }
 
 // variable returns the value of a variable at the current location.
@@ -4578,14 +4576,7 @@ func AddAux2(a *obj.Addr, v *ssa.Value, offset int64) {
 	switch sym := v.Aux.(type) {
 	case *ssa.ExternSymbol:
 		a.Name = obj.NAME_EXTERN
-		switch s := sym.Sym.(type) {
-		case *Sym:
-			a.Sym = Linksym(s)
-		case *obj.LSym:
-			a.Sym = s
-		default:
-			v.Fatalf("ExternSymbol.Sym is %T", s)
-		}
+		a.Sym = sym.Sym
 	case *ssa.ArgSymbol:
 		n := sym.Node.(*Node)
 		a.Name = obj.NAME_PARAM

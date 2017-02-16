@@ -338,10 +338,6 @@ func walkstmt(n *Node) *Node {
 
 			ll := ascompatee(n.Op, rl, n.List.Slice(), &n.Ninit)
 			n.List.Set(reorder3(ll))
-			ls := n.List.Slice()
-			for i, n := range ls {
-				ls[i] = applywritebarrier(n)
-			}
 			break
 		}
 
@@ -529,7 +525,7 @@ opswitch:
 		}
 		if t.IsArray() {
 			safeexpr(n.Left, init)
-			Nodconst(n, n.Type, t.NumElem())
+			nodconst(n, n.Type, t.NumElem())
 			n.Typecheck = 1
 		}
 
@@ -683,7 +679,7 @@ opswitch:
 			break
 		}
 
-		if !instrumenting && iszero(n.Right) && !needwritebarrier(n.Left, n.Right) {
+		if !instrumenting && iszero(n.Right) {
 			break
 		}
 
@@ -727,7 +723,6 @@ opswitch:
 			static := n.IsStatic
 			n = convas(n, init)
 			n.IsStatic = static
-			n = applywritebarrier(n)
 		}
 
 	case OAS2:
@@ -736,9 +731,6 @@ opswitch:
 		walkexprlistsafe(n.Rlist.Slice(), init)
 		ll := ascompatee(OAS, n.List.Slice(), n.Rlist.Slice(), init)
 		ll = reorder3(ll)
-		for i, n := range ll {
-			ll[i] = applywritebarrier(n)
-		}
 		n = liststmt(ll)
 
 	// a,b,... = fn()
@@ -756,9 +748,6 @@ opswitch:
 		init.Append(r)
 
 		ll := ascompatet(n.Op, n.List, r.Type)
-		for i, n := range ll {
-			ll[i] = applywritebarrier(n)
-		}
 		n = liststmt(ll)
 
 	// x, y = <-c
@@ -791,18 +780,8 @@ opswitch:
 		r.Left = walkexpr(r.Left, init)
 		r.Right = walkexpr(r.Right, init)
 		t := r.Left.Type
-		p := ""
-		if t.Val().Width <= 128 { // Check ../../runtime/hashmap.go:maxValueSize before changing.
-			switch algtype(t.Key()) {
-			case AMEM32:
-				p = "mapaccess2_fast32"
-			case AMEM64:
-				p = "mapaccess2_fast64"
-			case ASTRING:
-				p = "mapaccess2_faststr"
-			}
-		}
 
+		_, p := mapaccessfast(t)
 		var key *Node
 		if p != "" {
 			// fast versions take key by value
@@ -811,7 +790,6 @@ opswitch:
 			// standard version takes key by reference
 			// orderexpr made sure key is addressable.
 			key = nod(OADDR, r.Right, nil)
-
 			p = "mapaccess2"
 		}
 
@@ -1173,18 +1151,7 @@ opswitch:
 			n = mkcall1(mapfn("mapassign", t), nil, init, typename(t), map_, key)
 		} else {
 			// m[k] is not the target of an assignment.
-			p := ""
-			if t.Val().Width <= 128 { // Check ../../runtime/hashmap.go:maxValueSize before changing.
-				switch algtype(t.Key()) {
-				case AMEM32:
-					p = "mapaccess1_fast32"
-				case AMEM64:
-					p = "mapaccess1_fast64"
-				case ASTRING:
-					p = "mapaccess1_faststr"
-				}
-			}
-
+			p, _ := mapaccessfast(t)
 			if p == "" {
 				// standard version takes key by reference.
 				// orderexpr made sure key is addressable.
@@ -2143,19 +2110,6 @@ func needwritebarrier(l *Node, r *Node) bool {
 	return true
 }
 
-// TODO(rsc): Perhaps componentgen should run before this.
-
-func applywritebarrier(n *Node) *Node {
-	if n.Left != nil && n.Right != nil && needwritebarrier(n.Left, n.Right) {
-		if Debug_wb > 1 {
-			Warnl(n.Pos, "marking %v for barrier", n.Left)
-		}
-		n.Op = OASWB
-		return n
-	}
-	return n
-}
-
 func convas(n *Node, init *Nodes) *Node {
 	if n.Op != OAS {
 		Fatalf("convas: not OAS %v", n.Op)
@@ -2697,6 +2651,23 @@ func mapfndel(name string, t *Type) *Node {
 	return fn
 }
 
+// mapaccessfast returns the names of the fast map access runtime routines for t.
+func mapaccessfast(t *Type) (access1, access2 string) {
+	// Check ../../runtime/hashmap.go:maxValueSize before changing.
+	if t.Val().Width > 128 {
+		return "", ""
+	}
+	switch algtype(t.Key()) {
+	case AMEM32:
+		return "mapaccess1_fast32", "mapaccess2_fast32"
+	case AMEM64:
+		return "mapaccess1_fast64", "mapaccess2_fast64"
+	case ASTRING:
+		return "mapaccess1_faststr", "mapaccess2_faststr"
+	}
+	return "", ""
+}
+
 func writebarrierfn(name string, l *Type, r *Type) *Node {
 	fn := syslook(name)
 	fn = substArgTypes(fn, l, r)
@@ -3143,6 +3114,16 @@ func walkcompare(n *Node, init *Nodes) *Node {
 
 	// Chose not to inline. Call equality function directly.
 	if !inline {
+		if isvaluelit(cmpl) {
+			var_ := temp(cmpl.Type)
+			anylit(cmpl, var_, init)
+			cmpl = var_
+		}
+		if isvaluelit(cmpr) {
+			var_ := temp(cmpr.Type)
+			anylit(cmpr, var_, init)
+			cmpr = var_
+		}
 		if !islvalue(cmpl) || !islvalue(cmpr) {
 			Fatalf("arguments of comparison must be lvalues - %v %v", cmpl, cmpr)
 		}
@@ -3232,37 +3213,6 @@ func finishcompare(n, r *Node, init *Nodes) *Node {
 		nn = r
 	}
 	return nn
-}
-
-func samecheap(a *Node, b *Node) bool {
-	var ar *Node
-	var br *Node
-	for a != nil && b != nil && a.Op == b.Op {
-		switch a.Op {
-		default:
-			return false
-
-		case ONAME:
-			return a == b
-
-		case ODOT, ODOTPTR:
-			if a.Sym != b.Sym {
-				return false
-			}
-
-		case OINDEX:
-			ar = a.Right
-			br = b.Right
-			if !Isconst(ar, CTINT) || !Isconst(br, CTINT) || ar.Val().U.(*Mpint).Cmp(br.Val().U.(*Mpint)) != 0 {
-				return false
-			}
-		}
-
-		a = a.Left
-		b = b.Left
-	}
-
-	return false
 }
 
 // isIntOrdering reports whether n is a <, ≤, >, or ≥ ordering between integers.
@@ -3468,7 +3418,7 @@ func walkdiv(n *Node, init *Nodes) *Node {
 		case TUINT8, TUINT16, TUINT32:
 			var nc Node
 
-			Nodconst(&nc, nl.Type, int64(m.Um))
+			nodconst(&nc, nl.Type, int64(m.Um))
 			n1 := nod(OHMUL, nl, &nc)
 			n1 = typecheck(n1, Erv)
 			if m.Ua != 0 {
@@ -3498,13 +3448,13 @@ func walkdiv(n *Node, init *Nodes) *Node {
 				// shift by m.s
 				var nc Node
 
-				Nodconst(&nc, Types[TUINT], int64(m.S))
+				nodconst(&nc, Types[TUINT], int64(m.S))
 				n = conv(nod(ORSH, n2, &nc), nl.Type)
 			} else {
 				// n = n1 >> m.s
 				var nc Node
 
-				Nodconst(&nc, Types[TUINT], int64(m.S))
+				nodconst(&nc, Types[TUINT], int64(m.S))
 				n = nod(ORSH, n1, &nc)
 			}
 
@@ -3512,7 +3462,7 @@ func walkdiv(n *Node, init *Nodes) *Node {
 		case TINT8, TINT16, TINT32:
 			var nc Node
 
-			Nodconst(&nc, nl.Type, m.Sm)
+			nodconst(&nc, nl.Type, m.Sm)
 			n1 := nod(OHMUL, nl, &nc)
 			n1 = typecheck(n1, Erv)
 			if m.Sm < 0 {
@@ -3523,13 +3473,13 @@ func walkdiv(n *Node, init *Nodes) *Node {
 			// shift by m.s
 			var ns Node
 
-			Nodconst(&ns, Types[TUINT], int64(m.S))
+			nodconst(&ns, Types[TUINT], int64(m.S))
 			n2 := conv(nod(ORSH, n1, &ns), nl.Type)
 
 			// add 1 iff n1 is negative.
 			var nneg Node
 
-			Nodconst(&nneg, Types[TUINT], int64(w)-1)
+			nodconst(&nneg, Types[TUINT], int64(w)-1)
 			n3 := nod(ORSH, nl, &nneg) // n4 = -1 iff n1 is negative.
 			n = nod(OSUB, n2, n3)
 
@@ -3546,7 +3496,7 @@ func walkdiv(n *Node, init *Nodes) *Node {
 	case 0:
 		if n.Op == OMOD {
 			// nl % 1 is zero.
-			Nodconst(n, n.Type, 0)
+			nodconst(n, n.Type, 0)
 		} else if s != 0 {
 			// divide by -1
 			n.Op = OMINUS
@@ -3565,7 +3515,7 @@ func walkdiv(n *Node, init *Nodes) *Node {
 				// nl & (2^pow-1) is (nl+1)%2^pow - 1.
 				var nc Node
 
-				Nodconst(&nc, Types[simtype[TUINT]], int64(w)-1)
+				nodconst(&nc, Types[simtype[TUINT]], int64(w)-1)
 				n1 := nod(ORSH, nl, &nc) // n1 = -1 iff nl < 0.
 				if pow == 1 {
 					n1 = typecheck(n1, Erv)
@@ -3575,14 +3525,14 @@ func walkdiv(n *Node, init *Nodes) *Node {
 					n2 := nod(OSUB, nl, n1)
 
 					var nc Node
-					Nodconst(&nc, nl.Type, 1)
+					nodconst(&nc, nl.Type, 1)
 					n3 := nod(OAND, n2, &nc)
 					n = nod(OADD, n3, n1)
 				} else {
 					// n = (nl+ε)&(nr-1) - ε where ε=2^pow-1 iff nl<0.
 					var nc Node
 
-					Nodconst(&nc, nl.Type, (1<<uint(pow))-1)
+					nodconst(&nc, nl.Type, (1<<uint(pow))-1)
 					n2 := nod(OAND, n1, &nc) // n2 = 2^pow-1 iff nl<0.
 					n2 = typecheck(n2, Erv)
 					n2 = cheapexpr(n2, init)
@@ -3599,7 +3549,7 @@ func walkdiv(n *Node, init *Nodes) *Node {
 				// if nl < 0, we want to add 2^n-1 first.
 				var nc Node
 
-				Nodconst(&nc, Types[simtype[TUINT]], int64(w)-1)
+				nodconst(&nc, Types[simtype[TUINT]], int64(w)-1)
 				n1 := nod(ORSH, nl, &nc) // n1 = -1 iff nl < 0.
 				if pow == 1 {
 					// nl+1 is nl-(-1)
@@ -3608,7 +3558,7 @@ func walkdiv(n *Node, init *Nodes) *Node {
 					// Do a logical right right on -1 to keep pow bits.
 					var nc Node
 
-					Nodconst(&nc, Types[simtype[TUINT]], int64(w)-int64(pow))
+					nodconst(&nc, Types[simtype[TUINT]], int64(w)-int64(pow))
 					n2 := nod(ORSH, conv(n1, nl.Type.toUnsigned()), &nc)
 					n.Left = nod(OADD, nl, conv(n2, nl.Type))
 				}
@@ -3617,7 +3567,7 @@ func walkdiv(n *Node, init *Nodes) *Node {
 				n.Op = ORSH
 
 				var n2 Node
-				Nodconst(&n2, Types[simtype[TUINT]], int64(pow))
+				nodconst(&n2, Types[simtype[TUINT]], int64(pow))
 				n.Right = &n2
 				n.Typecheck = 0
 			}
@@ -3633,12 +3583,12 @@ func walkdiv(n *Node, init *Nodes) *Node {
 			// n = nl & (nr-1)
 			n.Op = OAND
 
-			Nodconst(&nc, nl.Type, nr.Int64()-1)
+			nodconst(&nc, nl.Type, nr.Int64()-1)
 		} else {
 			// n = nl >> pow
 			n.Op = ORSH
 
-			Nodconst(&nc, Types[simtype[TUINT]], int64(pow))
+			nodconst(&nc, Types[simtype[TUINT]], int64(pow))
 		}
 
 		n.Typecheck = 0

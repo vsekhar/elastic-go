@@ -116,16 +116,17 @@ and test commands:
 		For example, when building with a non-standard configuration,
 		use -pkgdir to keep generated packages in a separate location.
 	-tags 'tag list'
-		a list of build tags to consider satisfied during the build.
-		For more information about build tags, see the description of
+		a space-separated list of build tags to consider satisfied during the
+		build. For more information about build tags, see the description of
 		build constraints in the documentation for the go/build package.
 	-toolexec 'cmd args'
 		a program to use to invoke toolchain programs like vet and asm.
 		For example, instead of running asm, the go command will run
 		'cmd args /path/to/asm <arguments for asm>'.
 
-The list flags accept a space-separated list of strings. To embed spaces
-in an element in the list, surround it with either single or double quotes.
+All the flags that take a list of arguments accept a space-separated
+list of strings. To embed spaces in an element in the list, surround
+it with either single or double quotes.
 
 For more about specifying packages, see 'go help packages'.
 For more about where packages and binaries are installed,
@@ -1664,6 +1665,15 @@ func (b *Builder) moveOrCopyFile(a *Action, dst, src string, perm os.FileMode, f
 	// If we can update the mode and rename to the dst, do it.
 	// Otherwise fall back to standard copy.
 
+	// If the destination directory has the group sticky bit set,
+	// we have to copy the file to retain the correct permissions.
+	// https://golang.org/issue/18878
+	if fi, err := os.Stat(filepath.Dir(dst)); err == nil {
+		if fi.IsDir() && (fi.Mode()&os.ModeSetgid) != 0 {
+			return b.copyFile(a, dst, src, perm, force)
+		}
+	}
+
 	// The perm argument is meant to be adjusted according to umask,
 	// but we don't know what the umask is.
 	// Create a dummy file to find out.
@@ -2189,7 +2199,7 @@ func (gcToolchain) gc(b *Builder, p *load.Package, archive, obj string, asmhdr b
 	extFiles := len(p.CgoFiles) + len(p.CFiles) + len(p.CXXFiles) + len(p.MFiles) + len(p.FFiles) + len(p.SFiles) + len(p.SysoFiles) + len(p.SwigFiles) + len(p.SwigCXXFiles)
 	if p.Standard {
 		switch p.ImportPath {
-		case "bytes", "net", "os", "runtime/pprof", "sync", "time":
+		case "bytes", "internal/poll", "net", "os", "runtime/pprof", "sync", "syscall", "time":
 			extFiles++
 		}
 	}

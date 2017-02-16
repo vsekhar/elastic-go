@@ -76,13 +76,14 @@ func (sym *Sym) isAlias() bool {
 type Class uint8
 
 const (
-	Pxxx      Class = iota
-	PEXTERN         // global variable
-	PAUTO           // local variables
-	PAUTOHEAP       // local variable or parameter moved to heap
-	PPARAM          // input arguments
-	PPARAMOUT       // output results
-	PFUNC           // global function
+	Pxxx        Class = iota
+	PEXTERN           // global variable
+	PAUTO             // local variables
+	PAUTOHEAP         // local variable or parameter moved to heap
+	PAUTOREMOTE       // variable moved to remote heap
+	PPARAM            // input arguments
+	PPARAMOUT         // output results
+	PFUNC             // global function
 
 	PDISCARD // discard during parse of duplicate import
 )
@@ -376,7 +377,8 @@ var (
 	panicslice,
 	panicdivide,
 	growslice,
-	panicdottype,
+	panicdottypeE,
+	panicdottypeI,
 	panicnildottype,
 	assertE2I,
 	assertE2I2,

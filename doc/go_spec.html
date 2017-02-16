@@ -1,6 +1,6 @@
 <!--{
 	"Title": "The Go Programming Language Specification",
-	"Subtitle": "Version of February 6, 2017",
+	"Subtitle": "Version of February 9, 2017",
 	"Path": "/ref/spec"
 }-->
 
@@ -3908,7 +3908,8 @@ in any of these cases:
 	</li>
 	<li>
 	ignoring struct tags (see below),
-	<code>x</code>'s type and <code>T</code> are unnamed pointer types
+	<code>x</code>'s type and <code>T</code> are pointer types
+	that are not <a href="#Type_definitions">defined types</a>,
 	and their pointer base types have identical underlying types.
 	</li>
 	<li>
@@ -6468,7 +6469,7 @@ The following minimal alignment properties are guaranteed:
 </li>
 
 <li>For a variable <code>x</code> of array type: <code>unsafe.Alignof(x)</code> is the same as
-   <code>unsafe.Alignof(x[0])</code>, but at least 1.
+	the alignment of a variable of the array's element type.
 </li>
 </ol>
 

@@ -292,8 +292,8 @@ func siftdownTimer(i int) {
 
 // Entry points for net, time to call nanotime.
 
-//go:linkname net_runtimeNano net.runtimeNano
-func net_runtimeNano() int64 {
+//go:linkname poll_runtimeNano internal/poll.runtimeNano
+func poll_runtimeNano() int64 {
 	return nanotime()
 }
 
@@ -302,10 +302,4 @@ func time_runtimeNano() int64 {
 	return nanotime()
 }
 
-var startNano = nanotime()
-
-//go:linkname time_now time.now
-func time_now() (sec int64, nsec int32, mono uint64) {
-	sec, nsec = walltime()
-	return sec, nsec, uint64(nanotime() - startNano + 1)
-}
+var startNano int64 = nanotime()

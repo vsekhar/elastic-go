@@ -4148,6 +4148,52 @@ func rewriteValueAMD64_OpAMD64MOVBstore(v *Value, config *Config) bool {
 		v.AddArg(mem)
 		return true
 	}
+	// match: (MOVBstore [i] {s} p w   x0:(MOVBstore [i-1] {s} p (SHRWconst [8] w) mem))
+	// cond: x0.Uses == 1   && clobber(x0)
+	// result: (MOVWstore [i-1] {s} p (ROLWconst <w.Type> [8] w) mem)
+	for {
+		i := v.AuxInt
+		s := v.Aux
+		p := v.Args[0]
+		w := v.Args[1]
+		x0 := v.Args[2]
+		if x0.Op != OpAMD64MOVBstore {
+			break
+		}
+		if x0.AuxInt != i-1 {
+			break
+		}
+		if x0.Aux != s {
+			break
+		}
+		if p != x0.Args[0] {
+			break
+		}
+		x0_1 := x0.Args[1]
+		if x0_1.Op != OpAMD64SHRWconst {
+			break
+		}
+		if x0_1.AuxInt != 8 {
+			break
+		}
+		if w != x0_1.Args[0] {
+			break
+		}
+		mem := x0.Args[2]
+		if !(x0.Uses == 1 && clobber(x0)) {
+			break
+		}
+		v.reset(OpAMD64MOVWstore)
+		v.AuxInt = i - 1
+		v.Aux = s
+		v.AddArg(p)
+		v0 := b.NewValue0(v.Pos, OpAMD64ROLWconst, w.Type)
+		v0.AuxInt = 8
+		v0.AddArg(w)
+		v.AddArg(v0)
+		v.AddArg(mem)
+		return true
+	}
 	// match: (MOVBstore [i] {s} p w   x2:(MOVBstore [i-1] {s} p (SHRLconst [8] w)   x1:(MOVBstore [i-2] {s} p (SHRLconst [16] w)   x0:(MOVBstore [i-3] {s} p (SHRLconst [24] w) mem))))
 	// cond: x0.Uses == 1   && x1.Uses == 1   && x2.Uses == 1   && clobber(x0)   && clobber(x1)   && clobber(x2)
 	// result: (MOVLstore [i-3] {s} p (BSWAPL <w.Type> w) mem)
@@ -4872,6 +4918,365 @@ func rewriteValueAMD64_OpAMD64MOVBstoreidx1(v *Value, config *Config) bool {
 		v.AddArg(ptr)
 		v.AddArg(idx)
 		v.AddArg(val)
+		v.AddArg(mem)
+		return true
+	}
+	// match: (MOVBstoreidx1 [i] {s} p idx w   x0:(MOVBstoreidx1 [i-1] {s} p idx (SHRWconst [8] w) mem))
+	// cond: x0.Uses == 1   && clobber(x0)
+	// result: (MOVWstoreidx1 [i-1] {s} p idx (ROLWconst <w.Type> [8] w) mem)
+	for {
+		i := v.AuxInt
+		s := v.Aux
+		p := v.Args[0]
+		idx := v.Args[1]
+		w := v.Args[2]
+		x0 := v.Args[3]
+		if x0.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x0.AuxInt != i-1 {
+			break
+		}
+		if x0.Aux != s {
+			break
+		}
+		if p != x0.Args[0] {
+			break
+		}
+		if idx != x0.Args[1] {
+			break
+		}
+		x0_2 := x0.Args[2]
+		if x0_2.Op != OpAMD64SHRWconst {
+			break
+		}
+		if x0_2.AuxInt != 8 {
+			break
+		}
+		if w != x0_2.Args[0] {
+			break
+		}
+		mem := x0.Args[3]
+		if !(x0.Uses == 1 && clobber(x0)) {
+			break
+		}
+		v.reset(OpAMD64MOVWstoreidx1)
+		v.AuxInt = i - 1
+		v.Aux = s
+		v.AddArg(p)
+		v.AddArg(idx)
+		v0 := b.NewValue0(v.Pos, OpAMD64ROLWconst, w.Type)
+		v0.AuxInt = 8
+		v0.AddArg(w)
+		v.AddArg(v0)
+		v.AddArg(mem)
+		return true
+	}
+	// match: (MOVBstoreidx1 [i] {s} p idx w   x2:(MOVBstoreidx1 [i-1] {s} p idx (SHRLconst [8] w)   x1:(MOVBstoreidx1 [i-2] {s} p idx (SHRLconst [16] w)   x0:(MOVBstoreidx1 [i-3] {s} p idx (SHRLconst [24] w) mem))))
+	// cond: x0.Uses == 1   && x1.Uses == 1   && x2.Uses == 1   && clobber(x0)   && clobber(x1)   && clobber(x2)
+	// result: (MOVLstoreidx1 [i-3] {s} p idx (BSWAPL <w.Type> w) mem)
+	for {
+		i := v.AuxInt
+		s := v.Aux
+		p := v.Args[0]
+		idx := v.Args[1]
+		w := v.Args[2]
+		x2 := v.Args[3]
+		if x2.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x2.AuxInt != i-1 {
+			break
+		}
+		if x2.Aux != s {
+			break
+		}
+		if p != x2.Args[0] {
+			break
+		}
+		if idx != x2.Args[1] {
+			break
+		}
+		x2_2 := x2.Args[2]
+		if x2_2.Op != OpAMD64SHRLconst {
+			break
+		}
+		if x2_2.AuxInt != 8 {
+			break
+		}
+		if w != x2_2.Args[0] {
+			break
+		}
+		x1 := x2.Args[3]
+		if x1.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x1.AuxInt != i-2 {
+			break
+		}
+		if x1.Aux != s {
+			break
+		}
+		if p != x1.Args[0] {
+			break
+		}
+		if idx != x1.Args[1] {
+			break
+		}
+		x1_2 := x1.Args[2]
+		if x1_2.Op != OpAMD64SHRLconst {
+			break
+		}
+		if x1_2.AuxInt != 16 {
+			break
+		}
+		if w != x1_2.Args[0] {
+			break
+		}
+		x0 := x1.Args[3]
+		if x0.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x0.AuxInt != i-3 {
+			break
+		}
+		if x0.Aux != s {
+			break
+		}
+		if p != x0.Args[0] {
+			break
+		}
+		if idx != x0.Args[1] {
+			break
+		}
+		x0_2 := x0.Args[2]
+		if x0_2.Op != OpAMD64SHRLconst {
+			break
+		}
+		if x0_2.AuxInt != 24 {
+			break
+		}
+		if w != x0_2.Args[0] {
+			break
+		}
+		mem := x0.Args[3]
+		if !(x0.Uses == 1 && x1.Uses == 1 && x2.Uses == 1 && clobber(x0) && clobber(x1) && clobber(x2)) {
+			break
+		}
+		v.reset(OpAMD64MOVLstoreidx1)
+		v.AuxInt = i - 3
+		v.Aux = s
+		v.AddArg(p)
+		v.AddArg(idx)
+		v0 := b.NewValue0(v.Pos, OpAMD64BSWAPL, w.Type)
+		v0.AddArg(w)
+		v.AddArg(v0)
+		v.AddArg(mem)
+		return true
+	}
+	// match: (MOVBstoreidx1 [i] {s} p idx w   x6:(MOVBstoreidx1 [i-1] {s} p idx (SHRQconst [8] w)   x5:(MOVBstoreidx1 [i-2] {s} p idx (SHRQconst [16] w)   x4:(MOVBstoreidx1 [i-3] {s} p idx (SHRQconst [24] w)   x3:(MOVBstoreidx1 [i-4] {s} p idx (SHRQconst [32] w)   x2:(MOVBstoreidx1 [i-5] {s} p idx (SHRQconst [40] w)   x1:(MOVBstoreidx1 [i-6] {s} p idx (SHRQconst [48] w)   x0:(MOVBstoreidx1 [i-7] {s} p idx (SHRQconst [56] w) mem))))))))
+	// cond: x0.Uses == 1   && x1.Uses == 1   && x2.Uses == 1   && x3.Uses == 1   && x4.Uses == 1   && x5.Uses == 1   && x6.Uses == 1   && clobber(x0)   && clobber(x1)   && clobber(x2)   && clobber(x3)   && clobber(x4)   && clobber(x5)   && clobber(x6)
+	// result: (MOVQstoreidx1 [i-7] {s} p idx (BSWAPQ <w.Type> w) mem)
+	for {
+		i := v.AuxInt
+		s := v.Aux
+		p := v.Args[0]
+		idx := v.Args[1]
+		w := v.Args[2]
+		x6 := v.Args[3]
+		if x6.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x6.AuxInt != i-1 {
+			break
+		}
+		if x6.Aux != s {
+			break
+		}
+		if p != x6.Args[0] {
+			break
+		}
+		if idx != x6.Args[1] {
+			break
+		}
+		x6_2 := x6.Args[2]
+		if x6_2.Op != OpAMD64SHRQconst {
+			break
+		}
+		if x6_2.AuxInt != 8 {
+			break
+		}
+		if w != x6_2.Args[0] {
+			break
+		}
+		x5 := x6.Args[3]
+		if x5.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x5.AuxInt != i-2 {
+			break
+		}
+		if x5.Aux != s {
+			break
+		}
+		if p != x5.Args[0] {
+			break
+		}
+		if idx != x5.Args[1] {
+			break
+		}
+		x5_2 := x5.Args[2]
+		if x5_2.Op != OpAMD64SHRQconst {
+			break
+		}
+		if x5_2.AuxInt != 16 {
+			break
+		}
+		if w != x5_2.Args[0] {
+			break
+		}
+		x4 := x5.Args[3]
+		if x4.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x4.AuxInt != i-3 {
+			break
+		}
+		if x4.Aux != s {
+			break
+		}
+		if p != x4.Args[0] {
+			break
+		}
+		if idx != x4.Args[1] {
+			break
+		}
+		x4_2 := x4.Args[2]
+		if x4_2.Op != OpAMD64SHRQconst {
+			break
+		}
+		if x4_2.AuxInt != 24 {
+			break
+		}
+		if w != x4_2.Args[0] {
+			break
+		}
+		x3 := x4.Args[3]
+		if x3.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x3.AuxInt != i-4 {
+			break
+		}
+		if x3.Aux != s {
+			break
+		}
+		if p != x3.Args[0] {
+			break
+		}
+		if idx != x3.Args[1] {
+			break
+		}
+		x3_2 := x3.Args[2]
+		if x3_2.Op != OpAMD64SHRQconst {
+			break
+		}
+		if x3_2.AuxInt != 32 {
+			break
+		}
+		if w != x3_2.Args[0] {
+			break
+		}
+		x2 := x3.Args[3]
+		if x2.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x2.AuxInt != i-5 {
+			break
+		}
+		if x2.Aux != s {
+			break
+		}
+		if p != x2.Args[0] {
+			break
+		}
+		if idx != x2.Args[1] {
+			break
+		}
+		x2_2 := x2.Args[2]
+		if x2_2.Op != OpAMD64SHRQconst {
+			break
+		}
+		if x2_2.AuxInt != 40 {
+			break
+		}
+		if w != x2_2.Args[0] {
+			break
+		}
+		x1 := x2.Args[3]
+		if x1.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x1.AuxInt != i-6 {
+			break
+		}
+		if x1.Aux != s {
+			break
+		}
+		if p != x1.Args[0] {
+			break
+		}
+		if idx != x1.Args[1] {
+			break
+		}
+		x1_2 := x1.Args[2]
+		if x1_2.Op != OpAMD64SHRQconst {
+			break
+		}
+		if x1_2.AuxInt != 48 {
+			break
+		}
+		if w != x1_2.Args[0] {
+			break
+		}
+		x0 := x1.Args[3]
+		if x0.Op != OpAMD64MOVBstoreidx1 {
+			break
+		}
+		if x0.AuxInt != i-7 {
+			break
+		}
+		if x0.Aux != s {
+			break
+		}
+		if p != x0.Args[0] {
+			break
+		}
+		if idx != x0.Args[1] {
+			break
+		}
+		x0_2 := x0.Args[2]
+		if x0_2.Op != OpAMD64SHRQconst {
+			break
+		}
+		if x0_2.AuxInt != 56 {
+			break
+		}
+		if w != x0_2.Args[0] {
+			break
+		}
+		mem := x0.Args[3]
+		if !(x0.Uses == 1 && x1.Uses == 1 && x2.Uses == 1 && x3.Uses == 1 && x4.Uses == 1 && x5.Uses == 1 && x6.Uses == 1 && clobber(x0) && clobber(x1) && clobber(x2) && clobber(x3) && clobber(x4) && clobber(x5) && clobber(x6)) {
+			break
+		}
+		v.reset(OpAMD64MOVQstoreidx1)
+		v.AuxInt = i - 7
+		v.Aux = s
+		v.AddArg(p)
+		v.AddArg(idx)
+		v0 := b.NewValue0(v.Pos, OpAMD64BSWAPQ, w.Type)
+		v0.AddArg(w)
+		v.AddArg(v0)
 		v.AddArg(mem)
 		return true
 	}
@@ -11282,6 +11687,23 @@ func rewriteValueAMD64_OpAMD64ORL(v *Value, config *Config) bool {
 		v.AddArg(x)
 		return true
 	}
+	// match: (ORL x:(SHLLconst _) y)
+	// cond: y.Op != OpAMD64SHLLconst
+	// result: (ORL y x)
+	for {
+		x := v.Args[0]
+		if x.Op != OpAMD64SHLLconst {
+			break
+		}
+		y := v.Args[1]
+		if !(y.Op != OpAMD64SHLLconst) {
+			break
+		}
+		v.reset(OpAMD64ORL)
+		v.AddArg(y)
+		v.AddArg(x)
+		return true
+	}
 	// match: (ORL                  x0:(MOVBload [i]   {s} p mem)     s0:(SHLLconst [8] x1:(MOVBload [i+1] {s} p mem)))
 	// cond: x0.Uses == 1   && x1.Uses == 1   && s0.Uses == 1   && mergePoint(b,x0,x1) != nil   && clobber(x0)   && clobber(x1)   && clobber(s0)
 	// result: @mergePoint(b,x0,x1) (MOVWload [i] {s} p mem)
@@ -11541,19 +11963,11 @@ func rewriteValueAMD64_OpAMD64ORL(v *Value, config *Config) bool {
 		v0.AddArg(mem)
 		return true
 	}
-	// match: (ORL o1:(ORL o0:(ORL                        x0:(MOVBload [i] {s} p mem)     s0:(SHLLconst [8]  x1:(MOVBload [i-1] {s} p mem)))     s1:(SHLLconst [16] x2:(MOVBload [i-2] {s} p mem)))     s2:(SHLLconst [24] x3:(MOVBload [i-3] {s} p mem)))
-	// cond: x0.Uses == 1   && x1.Uses == 1   && x2.Uses == 1   && x3.Uses == 1   && s0.Uses == 1   && s1.Uses == 1   && s2.Uses == 1   && o0.Uses == 1   && o1.Uses == 1   && mergePoint(b,x0,x1,x2,x3) != nil   && clobber(x0)   && clobber(x1)   && clobber(x2)   && clobber(x3)   && clobber(s0)   && clobber(s1)   && clobber(s2)   && clobber(o0)   && clobber(o1)
-	// result: @mergePoint(b,x0,x1,x2,x3) (BSWAPL <v.Type> (MOVLload [i-3] {s} p mem))
+	// match: (ORL                        x0:(MOVBload [i] {s} p mem)     s0:(SHLLconst [8]  x1:(MOVBload [i-1] {s} p mem)))
+	// cond: x0.Uses == 1   && x1.Uses == 1   && s0.Uses == 1   && mergePoint(b,x0,x1) != nil   && clobber(x0)   && clobber(x1)   && clobber(s0)
+	// result: @mergePoint(b,x0,x1) (ROLWconst <v.Type> [8] (MOVWload [i-1] {s} p mem))
 	for {
-		o1 := v.Args[0]
-		if o1.Op != OpAMD64ORL {
-			break
-		}
-		o0 := o1.Args[0]
-		if o0.Op != OpAMD64ORL {
-			break
-		}
-		x0 := o0.Args[0]
+		x0 := v.Args[0]
 		if x0.Op != OpAMD64MOVBload {
 			break
 		}
@@ -11561,7 +11975,7 @@ func rewriteValueAMD64_OpAMD64ORL(v *Value, config *Config) bool {
 		s := x0.Aux
 		p := x0.Args[0]
 		mem := x0.Args[1]
-		s0 := o0.Args[1]
+		s0 := v.Args[1]
 		if s0.Op != OpAMD64SHLLconst {
 			break
 		}
@@ -11584,80 +11998,27 @@ func rewriteValueAMD64_OpAMD64ORL(v *Value, config *Config) bool {
 		if mem != x1.Args[1] {
 			break
 		}
-		s1 := o1.Args[1]
-		if s1.Op != OpAMD64SHLLconst {
+		if !(x0.Uses == 1 && x1.Uses == 1 && s0.Uses == 1 && mergePoint(b, x0, x1) != nil && clobber(x0) && clobber(x1) && clobber(s0)) {
 			break
 		}
-		if s1.AuxInt != 16 {
-			break
-		}
-		x2 := s1.Args[0]
-		if x2.Op != OpAMD64MOVBload {
-			break
-		}
-		if x2.AuxInt != i-2 {
-			break
-		}
-		if x2.Aux != s {
-			break
-		}
-		if p != x2.Args[0] {
-			break
-		}
-		if mem != x2.Args[1] {
-			break
-		}
-		s2 := v.Args[1]
-		if s2.Op != OpAMD64SHLLconst {
-			break
-		}
-		if s2.AuxInt != 24 {
-			break
-		}
-		x3 := s2.Args[0]
-		if x3.Op != OpAMD64MOVBload {
-			break
-		}
-		if x3.AuxInt != i-3 {
-			break
-		}
-		if x3.Aux != s {
-			break
-		}
-		if p != x3.Args[0] {
-			break
-		}
-		if mem != x3.Args[1] {
-			break
-		}
-		if !(x0.Uses == 1 && x1.Uses == 1 && x2.Uses == 1 && x3.Uses == 1 && s0.Uses == 1 && s1.Uses == 1 && s2.Uses == 1 && o0.Uses == 1 && o1.Uses == 1 && mergePoint(b, x0, x1, x2, x3) != nil && clobber(x0) && clobber(x1) && clobber(x2) && clobber(x3) && clobber(s0) && clobber(s1) && clobber(s2) && clobber(o0) && clobber(o1)) {
-			break
-		}
-		b = mergePoint(b, x0, x1, x2, x3)
-		v0 := b.NewValue0(v.Pos, OpAMD64BSWAPL, v.Type)
+		b = mergePoint(b, x0, x1)
+		v0 := b.NewValue0(v.Pos, OpAMD64ROLWconst, v.Type)
 		v.reset(OpCopy)
 		v.AddArg(v0)
-		v1 := b.NewValue0(v.Pos, OpAMD64MOVLload, config.fe.TypeUInt32())
-		v1.AuxInt = i - 3
+		v0.AuxInt = 8
+		v1 := b.NewValue0(v.Pos, OpAMD64MOVWload, config.fe.TypeUInt16())
+		v1.AuxInt = i - 1
 		v1.Aux = s
 		v1.AddArg(p)
 		v1.AddArg(mem)
 		v0.AddArg(v1)
 		return true
 	}
-	// match: (ORL o1:(ORL o0:(ORL                        x0:(MOVBloadidx1 [i] {s} p idx mem)     s0:(SHLLconst [8]  x1:(MOVBloadidx1 [i-1] {s} p idx mem)))     s1:(SHLLconst [16] x2:(MOVBloadidx1 [i-2] {s} p idx mem)))     s2:(SHLLconst [24] x3:(MOVBloadidx1 [i-3] {s} p idx mem)))
-	// cond: x0.Uses == 1   && x1.Uses == 1   && x2.Uses == 1   && x3.Uses == 1   && s0.Uses == 1   && s1.Uses == 1   && s2.Uses == 1   && o0.Uses == 1   && o1.Uses == 1   && mergePoint(b,x0,x1,x2,x3) != nil   && clobber(x0)   && clobber(x1)   && clobber(x2)   && clobber(x3)   && clobber(s0)   && clobber(s1)   && clobber(s2)   && clobber(o0)   && clobber(o1)
-	// result: @mergePoint(b,x0,x1,x2,x3) (BSWAPL <v.Type> (MOVLloadidx1 <v.Type> [i-3] {s} p idx mem))
+	// match: (ORL                        x0:(MOVBloadidx1 [i] {s} p idx mem)     s0:(SHLLconst [8]  x1:(MOVBloadidx1 [i-1] {s} p idx mem)))
+	// cond: x0.Uses == 1   && x1.Uses == 1   && s0.Uses == 1   && mergePoint(b,x0,x1) != nil   && clobber(x0)   && clobber(x1)   && clobber(s0)
+	// result: @mergePoint(b,x0,x1) (ROLWconst <v.Type> [8] (MOVWloadidx1 <v.Type> [i-1] {s} p idx mem))
 	for {
-		o1 := v.Args[0]
-		if o1.Op != OpAMD64ORL {
-			break
-		}
-		o0 := o1.Args[0]
-		if o0.Op != OpAMD64ORL {
-			break
-		}
-		x0 := o0.Args[0]
+		x0 := v.Args[0]
 		if x0.Op != OpAMD64MOVBloadidx1 {
 			break
 		}
@@ -11666,7 +12027,7 @@ func rewriteValueAMD64_OpAMD64ORL(v *Value, config *Config) bool {
 		p := x0.Args[0]
 		idx := x0.Args[1]
 		mem := x0.Args[2]
-		s0 := o0.Args[1]
+		s0 := v.Args[1]
 		if s0.Op != OpAMD64SHLLconst {
 			break
 		}
@@ -11692,6 +12053,131 @@ func rewriteValueAMD64_OpAMD64ORL(v *Value, config *Config) bool {
 		if mem != x1.Args[2] {
 			break
 		}
+		if !(x0.Uses == 1 && x1.Uses == 1 && s0.Uses == 1 && mergePoint(b, x0, x1) != nil && clobber(x0) && clobber(x1) && clobber(s0)) {
+			break
+		}
+		b = mergePoint(b, x0, x1)
+		v0 := b.NewValue0(v.Pos, OpAMD64ROLWconst, v.Type)
+		v.reset(OpCopy)
+		v.AddArg(v0)
+		v0.AuxInt = 8
+		v1 := b.NewValue0(v.Pos, OpAMD64MOVWloadidx1, v.Type)
+		v1.AuxInt = i - 1
+		v1.Aux = s
+		v1.AddArg(p)
+		v1.AddArg(idx)
+		v1.AddArg(mem)
+		v0.AddArg(v1)
+		return true
+	}
+	// match: (ORL o1:(ORL o0:(ROLWconst [8] x01:(MOVWload [i1] {s} p mem))     s1:(SHLLconst [16] x2:(MOVBload [i1-1] {s} p mem)))     s2:(SHLLconst [24] x3:(MOVBload [i1-2] {s} p mem)))
+	// cond: x01.Uses == 1   && x2.Uses == 1   && x3.Uses == 1   && s1.Uses == 1   && s2.Uses == 1   && o0.Uses == 1   && o1.Uses == 1   && mergePoint(b,x01,x2,x3) != nil   && clobber(x01)   && clobber(x2)   && clobber(x3)   && clobber(s1)   && clobber(s2)   && clobber(o0)   && clobber(o1)
+	// result: @mergePoint(b,x01,x2,x3) (BSWAPL <v.Type> (MOVLload [i1-2] {s} p mem))
+	for {
+		o1 := v.Args[0]
+		if o1.Op != OpAMD64ORL {
+			break
+		}
+		o0 := o1.Args[0]
+		if o0.Op != OpAMD64ROLWconst {
+			break
+		}
+		if o0.AuxInt != 8 {
+			break
+		}
+		x01 := o0.Args[0]
+		if x01.Op != OpAMD64MOVWload {
+			break
+		}
+		i1 := x01.AuxInt
+		s := x01.Aux
+		p := x01.Args[0]
+		mem := x01.Args[1]
+		s1 := o1.Args[1]
+		if s1.Op != OpAMD64SHLLconst {
+			break
+		}
+		if s1.AuxInt != 16 {
+			break
+		}
+		x2 := s1.Args[0]
+		if x2.Op != OpAMD64MOVBload {
+			break
+		}
+		if x2.AuxInt != i1-1 {
+			break
+		}
+		if x2.Aux != s {
+			break
+		}
+		if p != x2.Args[0] {
+			break
+		}
+		if mem != x2.Args[1] {
+			break
+		}
+		s2 := v.Args[1]
+		if s2.Op != OpAMD64SHLLconst {
+			break
+		}
+		if s2.AuxInt != 24 {
+			break
+		}
+		x3 := s2.Args[0]
+		if x3.Op != OpAMD64MOVBload {
+			break
+		}
+		if x3.AuxInt != i1-2 {
+			break
+		}
+		if x3.Aux != s {
+			break
+		}
+		if p != x3.Args[0] {
+			break
+		}
+		if mem != x3.Args[1] {
+			break
+		}
+		if !(x01.Uses == 1 && x2.Uses == 1 && x3.Uses == 1 && s1.Uses == 1 && s2.Uses == 1 && o0.Uses == 1 && o1.Uses == 1 && mergePoint(b, x01, x2, x3) != nil && clobber(x01) && clobber(x2) && clobber(x3) && clobber(s1) && clobber(s2) && clobber(o0) && clobber(o1)) {
+			break
+		}
+		b = mergePoint(b, x01, x2, x3)
+		v0 := b.NewValue0(v.Pos, OpAMD64BSWAPL, v.Type)
+		v.reset(OpCopy)
+		v.AddArg(v0)
+		v1 := b.NewValue0(v.Pos, OpAMD64MOVLload, config.fe.TypeUInt32())
+		v1.AuxInt = i1 - 2
+		v1.Aux = s
+		v1.AddArg(p)
+		v1.AddArg(mem)
+		v0.AddArg(v1)
+		return true
+	}
+	// match: (ORL o1:(ORL o0:(ROLWconst [8] x01:(MOVWloadidx1 [i1] {s} p idx mem))     s1:(SHLLconst [16] x2:(MOVBloadidx1 [i1-1] {s} p idx mem)))     s2:(SHLLconst [24] x3:(MOVBloadidx1 [i1-2] {s} p idx mem)))
+	// cond: x01.Uses == 1   && x2.Uses == 1   && x3.Uses == 1   && s1.Uses == 1   && s2.Uses == 1   && o0.Uses == 1   && o1.Uses == 1   && mergePoint(b,x01,x2,x3) != nil   && clobber(x01)   && clobber(x2)   && clobber(x3)   && clobber(s1)   && clobber(s2)   && clobber(o0)   && clobber(o1)
+	// result: @mergePoint(b,x01,x2,x3) (BSWAPL <v.Type> (MOVLloadidx1 <v.Type> [i1-2] {s} p idx mem))
+	for {
+		o1 := v.Args[0]
+		if o1.Op != OpAMD64ORL {
+			break
+		}
+		o0 := o1.Args[0]
+		if o0.Op != OpAMD64ROLWconst {
+			break
+		}
+		if o0.AuxInt != 8 {
+			break
+		}
+		x01 := o0.Args[0]
+		if x01.Op != OpAMD64MOVWloadidx1 {
+			break
+		}
+		i1 := x01.AuxInt
+		s := x01.Aux
+		p := x01.Args[0]
+		idx := x01.Args[1]
+		mem := x01.Args[2]
 		s1 := o1.Args[1]
 		if s1.Op != OpAMD64SHLLconst {
 			break
@@ -11703,7 +12189,7 @@ func rewriteValueAMD64_OpAMD64ORL(v *Value, config *Config) bool {
 		if x2.Op != OpAMD64MOVBloadidx1 {
 			break
 		}
-		if x2.AuxInt != i-2 {
+		if x2.AuxInt != i1-1 {
 			break
 		}
 		if x2.Aux != s {
@@ -11729,7 +12215,7 @@ func rewriteValueAMD64_OpAMD64ORL(v *Value, config *Config) bool {
 		if x3.Op != OpAMD64MOVBloadidx1 {
 			break
 		}
-		if x3.AuxInt != i-3 {
+		if x3.AuxInt != i1-2 {
 			break
 		}
 		if x3.Aux != s {
@@ -11744,15 +12230,15 @@ func rewriteValueAMD64_OpAMD64ORL(v *Value, config *Config) bool {
 		if mem != x3.Args[2] {
 			break
 		}
-		if !(x0.Uses == 1 && x1.Uses == 1 && x2.Uses == 1 && x3.Uses == 1 && s0.Uses == 1 && s1.Uses == 1 && s2.Uses == 1 && o0.Uses == 1 && o1.Uses == 1 && mergePoint(b, x0, x1, x2, x3) != nil && clobber(x0) && clobber(x1) && clobber(x2) && clobber(x3) && clobber(s0) && clobber(s1) && clobber(s2) && clobber(o0) && clobber(o1)) {
+		if !(x01.Uses == 1 && x2.Uses == 1 && x3.Uses == 1 && s1.Uses == 1 && s2.Uses == 1 && o0.Uses == 1 && o1.Uses == 1 && mergePoint(b, x01, x2, x3) != nil && clobber(x01) && clobber(x2) && clobber(x3) && clobber(s1) && clobber(s2) && clobber(o0) && clobber(o1)) {
 			break
 		}
-		b = mergePoint(b, x0, x1, x2, x3)
+		b = mergePoint(b, x01, x2, x3)
 		v0 := b.NewValue0(v.Pos, OpAMD64BSWAPL, v.Type)
 		v.reset(OpCopy)
 		v.AddArg(v0)
 		v1 := b.NewValue0(v.Pos, OpAMD64MOVLloadidx1, v.Type)
-		v1.AuxInt = i - 3
+		v1.AuxInt = i1 - 2
 		v1.Aux = s
 		v1.AddArg(p)
 		v1.AddArg(idx)
@@ -11906,6 +12392,23 @@ func rewriteValueAMD64_OpAMD64ORQ(v *Value, config *Config) bool {
 		}
 		v.reset(OpCopy)
 		v.Type = x.Type
+		v.AddArg(x)
+		return true
+	}
+	// match: (ORQ x:(SHLQconst _) y)
+	// cond: y.Op != OpAMD64SHLQconst
+	// result: (ORQ y x)
+	for {
+		x := v.Args[0]
+		if x.Op != OpAMD64SHLQconst {
+			break
+		}
+		y := v.Args[1]
+		if !(y.Op != OpAMD64SHLQconst) {
+			break
+		}
+		v.reset(OpAMD64ORQ)
+		v.AddArg(y)
 		v.AddArg(x)
 		return true
 	}
