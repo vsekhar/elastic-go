@@ -1170,7 +1170,7 @@ func ullmancalc(n *Node) {
 		goto out
 
 	case OAS:
-		if !needwritebarrier(n.Left, n.Right) {
+		if !needwritebarrier(n.Left) {
 			break
 		}
 		fallthrough
@@ -1962,42 +1962,6 @@ func liststmt(l []*Node) *Node {
 		n.Pos = l[0].Pos
 	}
 	return n
-}
-
-// return power of 2 of the constant
-// operand. -1 if it is not a power of 2.
-// 1000+ if it is a -(power of 2)
-func powtwo(n *Node) int {
-	if n == nil || n.Op != OLITERAL || n.Type == nil {
-		return -1
-	}
-	if !n.Type.IsInteger() {
-		return -1
-	}
-
-	v := uint64(n.Int64())
-	b := uint64(1)
-	for i := 0; i < 64; i++ {
-		if b == v {
-			return i
-		}
-		b = b << 1
-	}
-
-	if !n.Type.IsSigned() {
-		return -1
-	}
-
-	v = -v
-	b = 1
-	for i := 0; i < 64; i++ {
-		if b == v {
-			return i + 1000
-		}
-		b = b << 1
-	}
-
-	return -1
 }
 
 func ngotype(n *Node) *Sym {
