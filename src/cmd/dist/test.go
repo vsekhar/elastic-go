@@ -578,6 +578,10 @@ func (t *tester) registerTests() {
 		}
 	}
 
+	if t.supportedBuildmode("remote") && t.goos == "linux" && t.goarch == "amd64" {
+		t.registerTest("testremote", "../misc/remote", "./test.bash")
+	}
+
 	// Doc tests only run on builders.
 	// They find problems approximately never.
 	if t.hasBash() && t.goos != "nacl" && t.goos != "android" && !t.iOS() && os.Getenv("GO_BUILDER_NAME") != "" {
@@ -786,6 +790,11 @@ func (t *tester) supportedBuildmode(mode string) bool {
 		// to crash, see https://golang.org/issue/17138
 		switch pair {
 		case "linux-386", "linux-amd64", "linux-arm":
+			return true
+		}
+		return false
+	case "remote":
+		if t.goos == "linux" && t.goarch == "amd64" {
 			return true
 		}
 		return false
