@@ -356,6 +356,9 @@ var oh64 PE64_IMAGE_OPTIONAL_HEADER
 
 var sh [16]IMAGE_SECTION_HEADER
 
+// shNames stores full names of PE sections stored in sh.
+var shNames []string
+
 var dd []IMAGE_DATA_DIRECTORY
 
 type Imp struct {
@@ -379,7 +382,7 @@ var dexport [1024]*Symbol
 
 var nexport int
 
-func addpesection(ctxt *Link, name string, sectsize int, filesize int) *IMAGE_SECTION_HEADER {
+func addpesectionWithLongName(ctxt *Link, shortname, longname string, sectsize int, filesize int) *IMAGE_SECTION_HEADER {
 	if pensect == 16 {
 		Errorf(nil, "too many sections")
 		errorexit()
@@ -387,7 +390,8 @@ func addpesection(ctxt *Link, name string, sectsize int, filesize int) *IMAGE_SE
 
 	h := &sh[pensect]
 	pensect++
-	copy(h.Name[:], name)
+	copy(h.Name[:], shortname)
+	shNames = append(shNames, longname)
 	h.VirtualSize = uint32(sectsize)
 	h.VirtualAddress = uint32(nextsectoff)
 	nextsectoff = int(Rnd(int64(nextsectoff)+int64(sectsize), PESECTALIGN))
@@ -400,6 +404,9 @@ func addpesection(ctxt *Link, name string, sectsize int, filesize int) *IMAGE_SE
 	return h
 }
 
+func addpesection(ctxt *Link, name string, sectsize int, filesize int) *IMAGE_SECTION_HEADER {
+	return addpesectionWithLongName(ctxt, name, name, sectsize, filesize)
+}
 func chksectoff(ctxt *Link, h *IMAGE_SECTION_HEADER, off int64) {
 	if off != int64(h.PointerToRawData) {
 		Errorf(nil, "%s.PointerToRawData = %#x, want %#x", cstring(h.Name[:]), uint64(int64(h.PointerToRawData)), uint64(off))
@@ -484,6 +491,11 @@ func pewrite() {
 		binary.Write(&coutbuf, binary.LittleEndian, &oh64)
 	} else {
 		binary.Write(&coutbuf, binary.LittleEndian, &oh)
+	}
+	if Linkmode == LinkExternal {
+		for i := range sh[:pensect] {
+			sh[i].VirtualAddress = 0
+		}
 	}
 	binary.Write(&coutbuf, binary.LittleEndian, sh[:pensect])
 }
@@ -828,7 +840,7 @@ func perelocsect(ctxt *Link, sect *Section, syms []*Symbol) int {
 			if r.Xsym.Dynid < 0 {
 				Errorf(sym, "reloc %d to non-coff symbol %s (outer=%s) %d", r.Type, r.Sym.Name, r.Xsym.Name, r.Sym.Type)
 			}
-			if !Thearch.PEreloc1(sym, r, int64(uint64(sym.Value+int64(r.Off))-PEBASE)) {
+			if !Thearch.PEreloc1(sym, r, int64(uint64(sym.Value+int64(r.Off))-sect.Seg.Vaddr)) {
 				Errorf(sym, "unsupported obj reloc %d/%d to %s", r.Type, r.Siz, r.Sym.Name)
 			}
 
@@ -896,8 +908,7 @@ func peemitreloc(ctxt *Link, text, data, ctors *IMAGE_SECTION_HEADER) {
 	dottext := ctxt.Syms.Lookup(".text", 0)
 	ctors.NumberOfRelocations = 1
 	ctors.PointerToRelocations = uint32(coutbuf.Offset())
-	sectoff := ctors.VirtualAddress
-	Lputl(sectoff)
+	Lputl(0)
 	Lputl(uint32(dottext.Dynid))
 	switch obj.GOARCH {
 	default:
@@ -942,7 +953,7 @@ func newPEDWARFSection(ctxt *Link, name string, size int64) *IMAGE_SECTION_HEADE
 
 	off := strtbladd(name)
 	s := fmt.Sprintf("/%d", off)
-	h := addpesection(ctxt, s, int(size), int(size))
+	h := addpesectionWithLongName(ctxt, s, name, int(size), int(size))
 	h.Characteristics = IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_DISCARDABLE
 
 	return h
@@ -952,6 +963,25 @@ func newPEDWARFSection(ctxt *Link, name string, size int64) *IMAGE_SECTION_HEADE
 // It returns number of records written.
 func writePESymTableRecords(ctxt *Link) int {
 	var symcnt int
+
+	writeOneSymbol := func(s *Symbol, addr int64, sectidx int, typ uint16, class uint8) {
+		// write COFF symbol table record
+		if len(s.Name) > 8 {
+			Lputl(0)
+			Lputl(uint32(strtbladd(s.Name)))
+		} else {
+			strnput(s.Name, 8)
+		}
+		Lputl(uint32(addr))
+		Wputl(uint16(sectidx))
+		Wputl(typ)
+		Cput(class)
+		Cput(0) // no aux entries
+
+		s.Dynid = int32(symcnt)
+
+		symcnt++
+	}
 
 	put := func(ctxt *Link, s *Symbol, name string, type_ SymbolType, addr int64, gotype *Symbol) {
 		if s == nil {
@@ -967,16 +997,13 @@ func writePESymTableRecords(ctxt *Link) int {
 		}
 
 		// Only windows/386 requires underscore prefix on external symbols.
-		// Include .text symbol as external, because .ctors section relocations refer to it.
 		if SysArch.Family == sys.I386 &&
 			Linkmode == LinkExternal &&
-			(s.Type == obj.SHOSTOBJ ||
-				s.Attr.CgoExport() ||
-				s.Name == ".text") {
+			(s.Type == obj.SHOSTOBJ || s.Attr.CgoExport()) {
 			s.Name = "_" + s.Name
 		}
 
-		var typ uint16
+		typ := uint16(IMAGE_SYM_TYPE_NULL)
 		var sect int
 		var value int64
 		// Note: although address of runtime.edata (type SDATA) is at the start of .bss section
@@ -997,35 +1024,21 @@ func writePESymTableRecords(ctxt *Link) int {
 		} else {
 			Errorf(s, "addpesym %#x", addr)
 		}
-
-		// write COFF symbol table record
-		if len(s.Name) > 8 {
-			Lputl(0)
-			Lputl(uint32(strtbladd(s.Name)))
-		} else {
-			strnput(s.Name, 8)
+		if typ != IMAGE_SYM_TYPE_NULL {
+		} else if Linkmode != LinkExternal {
+			// TODO: fix IMAGE_SYM_DTYPE_ARRAY value and use following expression, instead of 0x0308
+			typ = IMAGE_SYM_DTYPE_ARRAY<<8 + IMAGE_SYM_TYPE_STRUCT
+			typ = 0x0308 // "array of structs"
 		}
-		Lputl(uint32(value))
-		Wputl(uint16(sect))
-		if typ != 0 {
-			Wputl(typ)
-		} else if Linkmode == LinkExternal {
-			Wputl(0)
-		} else {
-			Wputl(0x0308) // "array of structs"
-		}
-		Cput(2) // storage class: external
-		Cput(0) // no aux entries
-
-		s.Dynid = int32(symcnt)
-
-		symcnt++
+		writeOneSymbol(s, value, sect, typ, IMAGE_SYM_CLASS_EXTERNAL)
 	}
 
 	if Linkmode == LinkExternal {
-		s := ctxt.Syms.Lookup(".text", 0)
-		if s.Type == obj.STEXT {
-			put(ctxt, s, s.Name, TextSym, s.Value, nil)
+		// Include section symbols as external, because
+		// .ctors and .debug_* section relocations refer to it.
+		for idx, name := range shNames {
+			sym := ctxt.Syms.Lookup(name, 0)
+			writeOneSymbol(sym, 0, idx+1, IMAGE_SYM_TYPE_NULL, IMAGE_SYM_CLASS_STATIC)
 		}
 	}
 

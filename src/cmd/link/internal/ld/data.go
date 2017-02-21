@@ -656,9 +656,6 @@ func relocsym(ctxt *Link, s *Symbol) {
 					// PE/COFF's PC32 relocation uses the address after the relocated
 					// bytes as the base. Compensate by skewing the addend.
 					o += int64(r.Siz)
-					// GNU ld always add VirtualAddress of the .text section to the
-					// relocated address, compensate that.
-					o -= int64(s.Sect.Vaddr - PEBASE)
 				} else {
 					Errorf(s, "unhandled pcrel relocation to %s on %v", rs.Name, Headtype)
 				}
@@ -2036,9 +2033,6 @@ func (ctxt *Link) textaddress() {
 		ctxt.Textp[0] = text
 	}
 
-	if Headtype == obj.Hwindows || Headtype == obj.Hwindowsgui {
-		ctxt.Syms.Lookup(".text", 0).Sect = sect
-	}
 	va := uint64(*FlagTextAddr)
 	n := 1
 	sect.Vaddr = va
@@ -2298,9 +2292,6 @@ func (ctxt *Link) address() {
 
 	ctxt.xdefine("runtime.text", obj.STEXT, int64(text.Vaddr))
 	ctxt.xdefine("runtime.etext", obj.STEXT, int64(lasttext.Vaddr+lasttext.Length))
-	if Headtype == obj.Hwindows || Headtype == obj.Hwindowsgui {
-		ctxt.xdefine(".text", obj.STEXT, int64(text.Vaddr))
-	}
 
 	// If there are multiple text sections, create runtime.text.n for
 	// their section Vaddr, using n for index
