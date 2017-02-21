@@ -428,7 +428,10 @@ func compile(fn *Node) {
 
 	gendebug(ptxt.From.Sym, fn.Func.Dcl)
 
-	// TODO(vsekhar): insert remote rewrite of SSA here
+	if flag_remote {
+		// TODO(vsekhar): Rewrite accesses to remote vars in SSA
+		// (analysis is done over the whole program parse tree earlier)
+	}
 
 	genssa(ssafn, ptxt, gcargs, gclocals)
 	ssafn.Free()

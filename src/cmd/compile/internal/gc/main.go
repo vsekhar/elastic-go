@@ -453,6 +453,12 @@ func Main() {
 	// because large values may contain pointers, it must happen early.
 	timings.Start("fe", "escapes")
 	escapes(xtop)
+	if flag_remote {
+		// Phase 6a: Concurrency escape analysis.
+		// Required for moving heap allocations of variables that cross
+		// goroutines to remote allocations.
+		escapesRemote(xtop)
+	}
 
 	// Phase 7: Transform closure bodies to properly reference captured variables.
 	// This needs to happen before walk, because closures must be transformed
