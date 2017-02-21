@@ -342,10 +342,6 @@ func Main() {
 		frame(1)
 	}
 
-	if _, ok := pkgMap["main"]; !ok && flag_remote {
-		log.Fatal("-remote can only be used when compiling pkg main")
-	}
-
 	// Process top-level declarations in phases.
 
 	// Phase 1: const, type, and names and types of funcs.

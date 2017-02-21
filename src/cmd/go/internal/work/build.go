@@ -409,6 +409,12 @@ func runBuild(cmd *base.Command, args []string) {
 
 	pkgs := load.PackagesForBuild(args)
 
+	if cfg.BuildBuildmode == "remote" {
+		if len(pkgs) != 1 || pkgs[0].Name != "main" {
+			base.Fatalf("go build: cannot use -buildmode=remote when not compiling package main")
+		}
+	}
+
 	if len(pkgs) == 1 && pkgs[0].Name == "main" && cfg.BuildO == "" {
 		_, cfg.BuildO = path.Split(pkgs[0].ImportPath)
 		cfg.BuildO += cfg.ExeSuffix
