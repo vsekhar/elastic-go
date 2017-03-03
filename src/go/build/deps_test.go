@@ -460,7 +460,7 @@ func listStdPkgs(goroot string) ([]string, error) {
 		}
 
 		name := filepath.ToSlash(path[len(src):])
-		if name == "builtin" || name == "cmd" || strings.Contains(name, "golang_org") {
+		if name == "builtin" || name == "cmd" || strings.Contains(name, "golang_org") || strings.HasPrefix(name, "vendor/") {
 			return filepath.SkipDir
 		}
 
