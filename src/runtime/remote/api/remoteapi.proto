@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package api;
+
+service RemoteRuntime {
+    rpc Alloc (AllocRequest) returns (AllocResponse);
+}
+
+message AllocRequest {
+    uint64 size = 1;
+}
+
+message AllocResponse {
+    fixed64 id = 1;
+}

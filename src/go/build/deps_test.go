@@ -413,6 +413,19 @@ var pkgDeps = map[string][]string{
 	"net/http/pprof":     {"L4", "OS", "html/template", "net/http", "runtime/pprof", "runtime/trace"},
 	"net/rpc":            {"L4", "NET", "encoding/gob", "html/template", "net/http"},
 	"net/rpc/jsonrpc":    {"L4", "NET", "encoding/json", "net/rpc"},
+
+	// Remote runtime.
+	"runtime/remote": {
+		"L4", "NET", "OS",
+		"crypto/tls",
+		"google.golang.org/grpc",
+		"net/http",
+	},
+	"runtime/remote/api": {
+		"fmt",
+		"github.com/golang/protobuf/proto",
+		"math",
+	},
 }
 
 // isMacro reports whether p is a package dependency macro

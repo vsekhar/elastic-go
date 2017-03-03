@@ -27,6 +27,7 @@ import (
 	"cmd/go/internal/get"
 	"cmd/go/internal/help"
 	"cmd/go/internal/list"
+	"cmd/go/internal/remote"
 	"cmd/go/internal/run"
 	"cmd/go/internal/test"
 	"cmd/go/internal/tool"
@@ -48,6 +49,7 @@ func init() {
 		get.CmdGet,
 		work.CmdInstall,
 		list.CmdList,
+		remote.CmdRemote,
 		run.CmdRun,
 		test.CmdTest,
 		tool.CmdTool,
