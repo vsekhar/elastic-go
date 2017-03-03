@@ -27,7 +27,6 @@ import (
 	"cmd/go/internal/get"
 	"cmd/go/internal/help"
 	"cmd/go/internal/list"
-	"cmd/go/internal/remote"
 	"cmd/go/internal/run"
 	"cmd/go/internal/test"
 	"cmd/go/internal/tool"
@@ -37,7 +36,7 @@ import (
 )
 
 func init() {
-	base.Commands = []*base.Command{
+	base.Commands = append(base.Commands,
 		work.CmdBuild,
 		clean.CmdClean,
 		doc.CmdDoc,
@@ -49,7 +48,6 @@ func init() {
 		get.CmdGet,
 		work.CmdInstall,
 		list.CmdList,
-		remote.CmdRemote,
 		run.CmdRun,
 		test.CmdTest,
 		tool.CmdTool,
@@ -65,7 +63,7 @@ func init() {
 		help.HelpPackages,
 		test.HelpTestflag,
 		test.HelpTestfunc,
-	}
+	)
 }
 
 func main() {
