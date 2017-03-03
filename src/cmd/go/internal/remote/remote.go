@@ -5,10 +5,14 @@
 package remote
 
 import (
+	"net"
 	"os"
 	"os/exec"
 
 	"cmd/go/internal/base"
+	pb "runtime/remote/api"
+
+	"google.golang.org/grpc"
 )
 
 var CmdRemote = &base.Command{
@@ -45,15 +49,23 @@ func runClient(cmd *base.Command) {
 }
 
 func runPassthrough(cmd *base.Command, binpath string) {
+	srv := grpc.NewServer()
+	pb.RegisterRemoteRuntimeServer(srv, newServer())
+	lis, err := net.Listen("tcp", ":0")
+	if err != nil {
+		base.Fatalf("go remote: failed to listen - %v", err)
+	}
+	_, port, err := net.SplitHostPort(lis.Addr().String())
+	if err != nil {
+		base.Fatalf("go remote: bad listen port - %v", err)
+	}
+	os.Setenv("GOREMOTE", "localhost:"+port)
+
 	ccmd := exec.Command(binpath)
 	ccmd.Stdin = os.Stdin
 	ccmd.Stdout = os.Stdout
 	ccmd.Stderr = os.Stderr
-
-	// TODO(vsekhar): start server
-	os.Setenv("GOREMOTE", "localhost:tbd")
-
-	err := ccmd.Run()
+	err = ccmd.Run()
 	if err != nil {
 		base.Fatalf("go remote: %s", err)
 	}

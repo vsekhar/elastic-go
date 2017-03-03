@@ -1,3 +1,3 @@
 package api
 
-//go:generate protoc remoteapi.proto --go_out=.
+//go:generate protoc remoteapi.proto --go_out=plugins=grpc:.

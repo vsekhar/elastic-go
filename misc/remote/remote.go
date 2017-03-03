@@ -2,10 +2,14 @@
 
 package main
 
+import (
+	"os"
+)
+
 var failed = false
 
 func main() {
-	if failed {
-		panic("failed")
+	if os.Getenv("GOREMOTE") == "" {
+		panic("no GOREMOTE specified")
 	}
 }
