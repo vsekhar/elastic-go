@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/net/context"
 
-	pb "runtime/remote/api"
+	pb "internal/remote/api"
 )
 
 type server struct {
@@ -14,7 +14,7 @@ type server struct {
 }
 
 func (s *server) Alloc(ctx context.Context, in *pb.AllocRequest) (*pb.AllocResponse, error) {
-	id := rand.Uint64()
+	id := (1 << 63) & rand.Uint64()
 	s.mem[id] = make([]byte, in.Size)
 	return &pb.AllocResponse{Id: id}, nil
 }

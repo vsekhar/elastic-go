@@ -9,6 +9,7 @@ package http
 import (
 	"bytes"
 	"internal/testenv"
+	"os"
 	"os/exec"
 	"reflect"
 	"testing"
@@ -77,14 +78,21 @@ func TestCleanHost(t *testing.T) {
 	}
 }
 
-// Test that cmd/go doesn't link in the HTTP server.
+// Test that testdata/transport.go doesn't link in the HTTP server.
 //
 // This catches accidental dependencies between the HTTP transport and
 // server code.
 func TestCmdGoNoHTTPServer(t *testing.T) {
 	t.Parallel()
 	goBin := testenv.GoToolPath(t)
-	out, err := exec.Command(goBin, "tool", "nm", goBin).CombinedOutput()
+	testfile := "testdata/transport.go"
+	outfile := "testdata/transport"
+	out, err := exec.Command(goBin, "build", "-o", outfile, testfile).CombinedOutput()
+	defer os.Remove(outfile)
+	if err != nil {
+		t.Fatalf("go build: %v: %s", err, out)
+	}
+	out, err = exec.Command(goBin, "tool", "nm", outfile).CombinedOutput()
 	if err != nil {
 		t.Fatalf("go tool nm: %v: %s", err, out)
 	}
@@ -102,10 +110,10 @@ func TestCmdGoNoHTTPServer(t *testing.T) {
 	for sym, want := range wantSym {
 		got := bytes.Contains(out, []byte(sym))
 		if !want && got {
-			t.Errorf("cmd/go unexpectedly links in HTTP server code; found symbol %q in cmd/go", sym)
+			t.Errorf(testfile+" unexpectedly links in HTTP server code; found symbol %q in cmd/go", sym)
 		}
 		if want && !got {
-			t.Errorf("expected to find symbol %q in cmd/go; not found", sym)
+			t.Errorf("expected to find symbol %q in "+testfile+"; not found", sym)
 		}
 	}
 }

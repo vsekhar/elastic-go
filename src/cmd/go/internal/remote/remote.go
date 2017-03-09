@@ -10,7 +10,7 @@ import (
 	"os/exec"
 
 	"cmd/go/internal/base"
-	pb "runtime/remote/api"
+	pb "internal/remote/api"
 
 	"google.golang.org/grpc"
 )

@@ -415,15 +415,18 @@ var pkgDeps = map[string][]string{
 	"net/rpc/jsonrpc":    {"L4", "NET", "encoding/json", "net/rpc"},
 
 	// Remote runtime.
-	"runtime/remote": {
+	"internal/remote": {
 		"L4", "NET", "OS",
 		"crypto/tls",
 		"google.golang.org/grpc",
+		"internal/remote/api",
 		"net/http",
 	},
-	"runtime/remote/api": {
+	"internal/remote/api": {
 		"fmt",
 		"github.com/golang/protobuf/proto",
+		"golang.org/x/net/context",
+		"google.golang.org/grpc",
 		"math",
 	},
 }
