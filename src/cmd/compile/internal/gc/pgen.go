@@ -6,6 +6,7 @@ package gc
 
 import (
 	"cmd/compile/internal/ssa"
+	"cmd/internal/dwarf"
 	"cmd/internal/obj"
 	"cmd/internal/src"
 	"cmd/internal/sys"
@@ -95,7 +96,7 @@ func gvardefx(n *Node, as obj.As) {
 
 	switch n.Class {
 	case PAUTO, PPARAM, PPARAMOUT:
-		if !n.Used {
+		if !n.Used() {
 			Prog(obj.ANOP)
 			return
 		}
@@ -187,8 +188,8 @@ func cmpstackvarlt(a, b *Node) bool {
 		return a.Xoffset < b.Xoffset
 	}
 
-	if a.Used != b.Used {
-		return a.Used
+	if a.Used() != b.Used() {
+		return a.Used()
 	}
 
 	ap := haspointers(a.Type)
@@ -197,8 +198,8 @@ func cmpstackvarlt(a, b *Node) bool {
 		return ap
 	}
 
-	ap = a.Name.Needzero
-	bp = b.Name.Needzero
+	ap = a.Name.Needzero()
+	bp = b.Name.Needzero()
 	if ap != bp {
 		return ap
 	}
@@ -226,13 +227,13 @@ func (s *ssaExport) AllocFrame(f *ssa.Func) {
 	// Mark the PAUTO's unused.
 	for _, ln := range Curfn.Func.Dcl {
 		if ln.Class == PAUTO {
-			ln.Used = false
+			ln.SetUsed(false)
 		}
 	}
 
 	for _, l := range f.RegAlloc {
 		if ls, ok := l.(ssa.LocalSlot); ok {
-			ls.N.(*Node).Used = true
+			ls.N.(*Node).SetUsed(true)
 		}
 
 	}
@@ -242,9 +243,9 @@ func (s *ssaExport) AllocFrame(f *ssa.Func) {
 		for _, v := range b.Values {
 			switch a := v.Aux.(type) {
 			case *ssa.ArgSymbol:
-				a.Node.(*Node).Used = true
+				a.Node.(*Node).SetUsed(true)
 			case *ssa.AutoSymbol:
-				a.Node.(*Node).Used = true
+				a.Node.(*Node).SetUsed(true)
 			}
 
 			if !scratchUsed {
@@ -255,7 +256,7 @@ func (s *ssaExport) AllocFrame(f *ssa.Func) {
 
 	if f.Config.NeedsFpScratch {
 		scratchFpMem = temp(Types[TUINT64])
-		scratchFpMem.Used = scratchUsed
+		scratchFpMem.SetUsed(scratchUsed)
 	}
 
 	sort.Sort(byStackVar(Curfn.Func.Dcl))
@@ -265,7 +266,7 @@ func (s *ssaExport) AllocFrame(f *ssa.Func) {
 		if n.Op != ONAME || n.Class != PAUTO {
 			continue
 		}
-		if !n.Used {
+		if !n.Used() {
 			Curfn.Func.Dcl = Curfn.Func.Dcl[:i]
 			break
 		}
@@ -368,7 +369,10 @@ func compile(fn *Node) {
 		return
 	}
 
-	newplist()
+	plist := new(obj.Plist)
+	pc = Ctxt.NewProg()
+	Clearp(pc)
+	plist.Firstpc = pc
 
 	setlineno(Curfn)
 
@@ -377,23 +381,25 @@ func compile(fn *Node) {
 		nam = nil
 	}
 	ptxt := Gins(obj.ATEXT, nam, nil)
+	fnsym := ptxt.From.Sym
+
 	ptxt.From3 = new(obj.Addr)
-	if fn.Func.Dupok {
+	if fn.Func.Dupok() {
 		ptxt.From3.Offset |= obj.DUPOK
 	}
-	if fn.Func.Wrapper {
+	if fn.Func.Wrapper() {
 		ptxt.From3.Offset |= obj.WRAPPER
 	}
-	if fn.Func.NoFramePointer {
+	if fn.Func.NoFramePointer() {
 		ptxt.From3.Offset |= obj.NOFRAME
 	}
-	if fn.Func.Needctxt {
+	if fn.Func.Needctxt() {
 		ptxt.From3.Offset |= obj.NEEDCTXT
 	}
 	if fn.Func.Pragma&Nosplit != 0 {
 		ptxt.From3.Offset |= obj.NOSPLIT
 	}
-	if fn.Func.ReflectMethod {
+	if fn.Func.ReflectMethod() {
 		ptxt.From3.Offset |= obj.REFLECTMETHOD
 	}
 	if fn.Func.Pragma&Systemstack != 0 {
@@ -415,19 +421,6 @@ func compile(fn *Node) {
 	gcargs := makefuncdatasym("gcargs·", obj.FUNCDATA_ArgsPointerMaps)
 	gclocals := makefuncdatasym("gclocals·", obj.FUNCDATA_LocalsPointerMaps)
 
-	if obj.Fieldtrack_enabled != 0 && len(Curfn.Func.FieldTrack) > 0 {
-		trackSyms := make([]*Sym, 0, len(Curfn.Func.FieldTrack))
-		for sym := range Curfn.Func.FieldTrack {
-			trackSyms = append(trackSyms, sym)
-		}
-		sort.Sort(symByName(trackSyms))
-		for _, sym := range trackSyms {
-			gtrack(sym)
-		}
-	}
-
-	gendebug(ptxt.From.Sym, fn.Func.Dcl)
-
 	if flag_remote {
 		// TODO(vsekhar): Rewrite accesses to remote vars in SSA
 		// (analysis is done over the whole program parse tree earlier)
@@ -435,40 +428,99 @@ func compile(fn *Node) {
 
 	genssa(ssafn, ptxt, gcargs, gclocals)
 	ssafn.Free()
+
+	obj.Flushplist(Ctxt, plist) // convert from Prog list to machine code
+	ptxt = nil                  // nil to prevent misuse; Prog may have been freed by Flushplist
+
+	fieldtrack(fnsym, fn.Func.FieldTrack)
 }
 
-func gendebug(fn *obj.LSym, decls []*Node) {
-	if fn == nil {
-		return
+func debuginfo(fnsym *obj.LSym) []*dwarf.Var {
+	if expect := Linksym(Curfn.Func.Nname.Sym); fnsym != expect {
+		Fatalf("unexpected fnsym: %v != %v", fnsym, expect)
 	}
 
-	for _, n := range decls {
+	var vars []*dwarf.Var
+	for _, n := range Curfn.Func.Dcl {
 		if n.Op != ONAME { // might be OTYPE or OLITERAL
 			continue
 		}
 
 		var name obj.AddrName
+		var abbrev int
+		offs := n.Xoffset
+
 		switch n.Class {
 		case PAUTO:
-			if !n.Used {
+			if !n.Used() {
 				continue
 			}
 			name = obj.NAME_AUTO
+
+			abbrev = dwarf.DW_ABRV_AUTO
+			if Ctxt.FixedFrameSize() == 0 {
+				offs -= int64(Widthptr)
+			}
+			if obj.Framepointer_enabled(obj.GOOS, obj.GOARCH) {
+				offs -= int64(Widthptr)
+			}
+
 		case PPARAM, PPARAMOUT:
 			name = obj.NAME_PARAM
+
+			abbrev = dwarf.DW_ABRV_PARAM
+			offs += Ctxt.FixedFrameSize()
+
 		default:
 			continue
 		}
 
-		a := &obj.Auto{
+		gotype := Linksym(ngotype(n))
+		fnsym.Autom = append(fnsym.Autom, &obj.Auto{
 			Asym:    obj.Linklookup(Ctxt, n.Sym.Name, 0),
 			Aoffset: int32(n.Xoffset),
 			Name:    name,
-			Gotype:  Linksym(ngotype(n)),
+			Gotype:  gotype,
+		})
+
+		if n.IsAutoTmp() {
+			continue
 		}
 
-		a.Link = fn.Autom
-		fn.Autom = a
+		typename := dwarf.InfoPrefix + gotype.Name[len("type."):]
+		vars = append(vars, &dwarf.Var{
+			Name:   n.Sym.Name,
+			Abbrev: abbrev,
+			Offset: int32(offs),
+			Type:   obj.Linklookup(Ctxt, typename, 0),
+		})
+	}
+
+	// Stable sort so that ties are broken with declaration order.
+	sort.Stable(dwarf.VarsByOffset(vars))
+
+	return vars
+}
+
+// fieldtrack adds R_USEFIELD relocations to fnsym to record any
+// struct fields that it used.
+func fieldtrack(fnsym *obj.LSym, tracked map[*Sym]struct{}) {
+	if fnsym == nil {
+		return
+	}
+	if obj.Fieldtrack_enabled == 0 || len(tracked) == 0 {
+		return
+	}
+
+	trackSyms := make([]*Sym, 0, len(tracked))
+	for sym := range tracked {
+		trackSyms = append(trackSyms, sym)
+	}
+	sort.Sort(symByName(trackSyms))
+	for _, sym := range trackSyms {
+		r := obj.Addrel(fnsym)
+		r.Sym = Linksym(sym)
+		r.Type = obj.R_USEFIELD
 	}
 }
 

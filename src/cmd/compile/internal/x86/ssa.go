@@ -114,8 +114,6 @@ func opregreg(op obj.As, dest, src int16) *obj.Prog {
 }
 
 func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
-	s.SetPos(v.Pos)
-
 	if gc.Thearch.Use387 {
 		if ssaGenValue387(s, v) {
 			return // v was handled by 387 generation.
@@ -264,8 +262,7 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 			j2.To.Val = s.Pc()
 		}
 
-	case ssa.Op386HMULL, ssa.Op386HMULW, ssa.Op386HMULB,
-		ssa.Op386HMULLU, ssa.Op386HMULWU, ssa.Op386HMULBU:
+	case ssa.Op386HMULL, ssa.Op386HMULLU:
 		// the frontend rewrites constant division by 8/16/32 bit integers into
 		// HMUL by a constant
 		// SSA rewrites generate the 64 bit versions
@@ -642,12 +639,6 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Type = obj.TYPE_REG
 		p.From.Reg = v.Args[0].Reg()
 		gc.AddrAuto(&p.To, v)
-	case ssa.OpPhi:
-		gc.CheckLoweredPhi(v)
-	case ssa.OpInitMem:
-		// memory arg needs no code
-	case ssa.OpArg:
-		// input args need no code
 	case ssa.Op386LoweredGetClosurePtr:
 		// Closure pointer is DX.
 		gc.CheckLoweredGetClosurePtr(v)
@@ -745,8 +736,6 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Reg = v.Args[0].Reg()
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
-	case ssa.OpSP, ssa.OpSB, ssa.OpSelect0, ssa.OpSelect1:
-		// nothing to do
 	case ssa.Op386SETEQ, ssa.Op386SETNE,
 		ssa.Op386SETL, ssa.Op386SETLE,
 		ssa.Op386SETG, ssa.Op386SETGE,
@@ -786,14 +775,6 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 	case ssa.Op386REPMOVSL:
 		gc.Prog(x86.AREP)
 		gc.Prog(x86.AMOVSL)
-	case ssa.OpVarDef:
-		gc.Gvardef(v.Aux.(*gc.Node))
-	case ssa.OpVarKill:
-		gc.Gvarkill(v.Aux.(*gc.Node))
-	case ssa.OpVarLive:
-		gc.Gvarlive(v.Aux.(*gc.Node))
-	case ssa.OpKeepAlive:
-		gc.KeepAlive(v)
 	case ssa.Op386LoweredNilCheck:
 		// Issue a load which will fault if the input is nil.
 		// TODO: We currently use the 2-byte instruction TESTB AX, (reg).

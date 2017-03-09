@@ -13,17 +13,18 @@ go/types/scope.go: method WriteTo(w io.Writer, n int, recurse bool) should have 
 
 // False positives.
 
+// Test of how fmt handles nil.
+fmt/fmt_test.go: arg nil for printf verb %s of wrong type: untyped nil
+
 // Nothing much to do about cross-package assembly. Unfortunate.
 runtime/asm_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: call is in package reflect
 runtime/asm_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: Equal is in package bytes
 runtime/asm_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: IndexByte is in package bytes
 runtime/asm_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: IndexByte is in package strings
-runtime/sys_GOOS_ARCHSUFF.s: [GOARCH] cannot check cross-package assembly function: now is in package time
 
 // Legitimate vet complaints in which we are testing for correct runtime behavior
 // in bad situations that vet can also detect statically.
 cmd/cover/testdata/test.go: unreachable code
-fmt/fmt_test.go: arg nil for printf verb %s of wrong type: untyped nil
 encoding/json/decode_test.go: struct field m has json tag but is not exported
 encoding/json/decode_test.go: struct field m2 has json tag but is not exported
 encoding/json/tagkey_test.go: struct field tag `:"BadFormat"` not compatible with reflect.StructTag.Get: bad syntax for struct tag key
@@ -54,25 +55,8 @@ encoding/xml/read_test.go: method UnmarshalXML(d *Decoder, start StartElement) e
 // Mostly code that uses clever const tricks to determine
 // or use the size of an int or pointer (and related values).
 image/png/paeth.go: x might be too small for shift of 63
-math/big/arith.go: x might be too small for shift of 32
-math/big/arith.go: y might be too small for shift of 32
-math/big/arith.go: w0 might be too small for shift of 32
-math/big/arith.go: t might be too small for shift of 32
-math/big/arith.go: w1 might be too small for shift of 32
-math/big/arith.go: v might be too small for shift of 32
-math/big/arith.go: un10 might be too small for shift of 32
-math/big/arith.go: (xi&yi | (xi|yi)&^zi) might be too small for shift of 63
-math/big/arith.go: (yi&^xi | (yi|^xi)&zi) might be too small for shift of 63
-math/big/arith.go: xi &^ zi might be too small for shift of 63
-math/big/arith.go: (zi &^ xi) might be too small for shift of 63
 math/big/float.go: x[i] might be too small for shift of 32
-math/big/nat.go: t too small for shift of 64
-math/big/nat.go: x too small for shift of 64
-math/big/nat.go: ((x & -x) * (deBruijn64 & _M)) might be too small for shift of 58
 math/big/nat.go: Word(rand.Uint32()) might be too small for shift of 32
-math/big/nat.go: yi might be too small for shift of 60
-math/big/nat.go: yi might be too small for shift of 60
-runtime/cpuprof.go: h might be too small for shift of 56
 runtime/malloc.go: uintptr(i) might be too small for shift of 40
 runtime/malloc.go: uintptr(i) might be too small for shift of 40
 runtime/malloc.go: uintptr(i) might be too small for shift of 40

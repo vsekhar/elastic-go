@@ -76,7 +76,7 @@ func ggloblnod(nam *Node) {
 	s := Linksym(nam.Sym)
 	s.Gotype = Linksym(ngotype(nam))
 	flags := 0
-	if nam.Name.Readonly {
+	if nam.Name.Readonly() {
 		flags = obj.RODATA
 	}
 	if nam.Type != nil && !haspointers(nam.Type) {
@@ -95,13 +95,6 @@ func ggloblLSym(s *obj.LSym, width int32, flags int16) {
 		flags &^= obj.LOCAL
 	}
 	Ctxt.Globl(s, int64(width), int(flags))
-}
-
-func gtrack(s *Sym) {
-	p := Gins(obj.AUSEFIELD, nil, nil)
-	p.From.Type = obj.TYPE_MEM
-	p.From.Name = obj.NAME_EXTERN
-	p.From.Sym = Linksym(s)
 }
 
 func isfat(t *Type) bool {
@@ -161,16 +154,6 @@ func Addrconst(a *obj.Addr, v int64) {
 	a.Offset = v
 }
 
-func newplist() *obj.Plist {
-	pl := obj.Linknewplist(Ctxt)
-
-	pc = Ctxt.NewProg()
-	Clearp(pc)
-	pl.Firstpc = pc
-
-	return pl
-}
-
 // nodarg returns a Node for the function argument denoted by t,
 // which is either the entire function argument or result struct (t is a  struct *Type)
 // or a specific argument (t is a *Field within a struct *Type).
@@ -212,7 +195,7 @@ func nodarg(t interface{}, fp int) *Node {
 			Fatalf("nodarg: offset not computed for %v", t)
 		}
 		n.Xoffset = first.Offset
-		n.Addable = true
+		n.SetAddable(true)
 
 	case *Field:
 		funarg = t.Funarg
@@ -257,7 +240,7 @@ func nodarg(t interface{}, fp int) *Node {
 			Fatalf("nodarg: offset not computed for %v", t)
 		}
 		n.Xoffset = t.Offset
-		n.Addable = true
+		n.SetAddable(true)
 		n.Orig = t.Nname
 	}
 
@@ -284,7 +267,7 @@ func nodarg(t interface{}, fp int) *Node {
 	}
 
 	n.Typecheck = 1
-	n.Addrtaken = true // keep optimizers at bay
+	n.SetAddrtaken(true) // keep optimizers at bay
 	return n
 }
 
@@ -299,8 +282,7 @@ func Patch(p *obj.Prog, to *obj.Prog) {
 // Gins inserts instruction as. f is from, t is to.
 func Gins(as obj.As, f, t *Node) *obj.Prog {
 	switch as {
-	case obj.AVARKILL, obj.AVARLIVE, obj.AVARDEF,
-		obj.ATEXT, obj.AFUNCDATA, obj.AUSEFIELD:
+	case obj.AVARKILL, obj.AVARLIVE, obj.AVARDEF, obj.ATEXT, obj.AFUNCDATA:
 	default:
 		Fatalf("unhandled gins op %v", as)
 	}

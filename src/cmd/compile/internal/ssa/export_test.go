@@ -6,13 +6,13 @@ package ssa
 
 import (
 	"cmd/internal/obj"
+	"cmd/internal/obj/s390x"
 	"cmd/internal/obj/x86"
 	"cmd/internal/src"
 	"testing"
 )
 
 var CheckFunc = checkFunc
-var PrintFunc = printFunc
 var Opt = opt
 var Deadcode = deadcode
 var Copyelim = copyelim
@@ -22,17 +22,34 @@ func testConfig(t testing.TB) *Config {
 	return NewConfig("amd64", DummyFrontend{t}, TestCtxt, true)
 }
 
+func testConfigS390X(t testing.TB) *Config {
+	return NewConfig("s390x", DummyFrontend{t}, obj.Linknew(&s390x.Links390x), true)
+}
+
 // DummyFrontend is a test-only frontend.
 // It assumes 64 bit integers and pointers.
 type DummyFrontend struct {
 	t testing.TB
 }
 
+type DummyAuto struct {
+	t Type
+	s string
+}
+
+func (d *DummyAuto) Typ() Type {
+	return d.t
+}
+
+func (d *DummyAuto) String() string {
+	return d.s
+}
+
 func (DummyFrontend) StringData(s string) interface{} {
 	return nil
 }
 func (DummyFrontend) Auto(t Type) GCNode {
-	return nil
+	return &DummyAuto{t: t, s: "aDummyAuto"}
 }
 func (d DummyFrontend) SplitString(s LocalSlot) (LocalSlot, LocalSlot) {
 	return LocalSlot{s.N, d.TypeBytePtr(), s.Off}, LocalSlot{s.N, d.TypeInt(), s.Off + 8}

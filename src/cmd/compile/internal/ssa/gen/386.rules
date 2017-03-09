@@ -45,10 +45,6 @@
 
 (Hmul32  x y) -> (HMULL  x y)
 (Hmul32u x y) -> (HMULLU x y)
-(Hmul16  x y) -> (HMULW  x y)
-(Hmul16u x y) -> (HMULWU x y)
-(Hmul8   x y) -> (HMULB  x y)
-(Hmul8u  x y) -> (HMULBU x y)
 
 (Mod32  x y) -> (MODL  x y)
 (Mod32u x y) -> (MODLU x y)
@@ -121,6 +117,9 @@
 
 (Cvt32Fto64F x) -> (CVTSS2SD x)
 (Cvt64Fto32F x) -> (CVTSD2SS x)
+
+(Round32F x) -> x
+(Round64F x) -> x
 
 // Lowering shifts
 // Unsigned shifts need to return 0 if shift amount is >= width of shifted value.

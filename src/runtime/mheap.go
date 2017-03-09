@@ -82,9 +82,11 @@ type mheap struct {
 	// compiler can't 8-byte align fields.
 
 	// Malloc stats.
-	largefree  uint64                  // bytes freed for large objects (>maxsmallsize)
-	nlargefree uint64                  // number of frees for large objects (>maxsmallsize)
-	nsmallfree [_NumSizeClasses]uint64 // number of frees for small objects (<=maxsmallsize)
+	largealloc  uint64                  // bytes allocated for large objects
+	nlargealloc uint64                  // number of large object allocations
+	largefree   uint64                  // bytes freed for large objects (>maxsmallsize)
+	nlargefree  uint64                  // number of frees for large objects (>maxsmallsize)
+	nsmallfree  [_NumSizeClasses]uint64 // number of frees for small objects (<=maxsmallsize)
 
 	// range of addresses we might see in the heap
 	bitmap         uintptr // Points to one byte past the end of the bitmap
@@ -178,7 +180,7 @@ type mspan struct {
 	// for the next free object in this span.
 	// Each allocation scans allocBits starting at freeindex until it encounters a 0
 	// indicating a free object. freeindex is then adjusted so that subsequent scans begin
-	// just past the the newly discovered free object.
+	// just past the newly discovered free object.
 	//
 	// If freeindex == nelem, this span has no free objects.
 	//
@@ -236,7 +238,7 @@ type mspan struct {
 	sweepgen    uint32
 	divMul      uint16     // for divide by elemsize - divMagic.mul
 	baseMask    uint16     // if non-0, elemsize is a power of 2, & this will get object allocation base
-	allocCount  uint16     // capacity - number of objects in freelist
+	allocCount  uint16     // number of allocated objects
 	sizeclass   uint8      // size class
 	incache     bool       // being used by an mcache
 	state       mSpanState // mspaninuse etc
@@ -587,9 +589,11 @@ func (h *mheap) alloc_m(npage uintptr, sizeclass int32, large bool) *mspan {
 		h.pagesInUse += uint64(npage)
 		if large {
 			memstats.heap_objects++
+			mheap_.largealloc += uint64(s.elemsize)
+			mheap_.nlargealloc++
 			atomic.Xadd64(&memstats.heap_live, int64(npage<<_PageShift))
 			// Swept spans are at the end of lists.
-			if s.npages < uintptr(len(h.free)) {
+			if s.npages < uintptr(len(h.busy)) {
 				h.busy[s.npages].insertBack(s)
 			} else {
 				h.busylarge.insertBack(s)
@@ -941,7 +945,7 @@ func (h *mheap) freeList(npages uintptr) *mSpanList {
 }
 
 func (h *mheap) busyList(npages uintptr) *mSpanList {
-	if npages < uintptr(len(h.free)) {
+	if npages < uintptr(len(h.busy)) {
 		return &h.busy[npages]
 	}
 	return &h.busylarge
@@ -1327,7 +1331,7 @@ type gcBitsHeader struct {
 //go:notinheap
 type gcBits struct {
 	// gcBitsHeader // side step recursive type bug (issue 14620) by including fields by hand.
-	free uintptr // free is the index into bits of the next free byte.
+	free uintptr // free is the index into bits of the next free byte; read/write atomically
 	next *gcBits
 	bits [gcBitsChunkBytes - gcBitsHeaderBytes]uint8
 }
@@ -1335,32 +1339,77 @@ type gcBits struct {
 var gcBitsArenas struct {
 	lock     mutex
 	free     *gcBits
-	next     *gcBits
+	next     *gcBits // Read atomically. Write atomically under lock.
 	current  *gcBits
 	previous *gcBits
+}
+
+// tryAlloc allocates from b or returns nil if b does not have enough room.
+// This is safe to call concurrently.
+func (b *gcBits) tryAlloc(bytes uintptr) *uint8 {
+	if b == nil || atomic.Loaduintptr(&b.free)+bytes > uintptr(len(b.bits)) {
+		return nil
+	}
+	// Try to allocate from this block.
+	end := atomic.Xadduintptr(&b.free, bytes)
+	if end > uintptr(len(b.bits)) {
+		return nil
+	}
+	// There was enough room.
+	start := end - bytes
+	return &b.bits[start]
 }
 
 // newMarkBits returns a pointer to 8 byte aligned bytes
 // to be used for a span's mark bits.
 func newMarkBits(nelems uintptr) *uint8 {
-	lock(&gcBitsArenas.lock)
 	blocksNeeded := uintptr((nelems + 63) / 64)
 	bytesNeeded := blocksNeeded * 8
-	if gcBitsArenas.next == nil ||
-		gcBitsArenas.next.free+bytesNeeded > uintptr(len(gcBits{}.bits)) {
-		// Allocate a new arena.
-		fresh := newArena()
-		fresh.next = gcBitsArenas.next
-		gcBitsArenas.next = fresh
+
+	// Try directly allocating from the current head arena.
+	head := (*gcBits)(atomic.Loadp(unsafe.Pointer(&gcBitsArenas.next)))
+	if p := head.tryAlloc(bytesNeeded); p != nil {
+		return p
 	}
-	if gcBitsArenas.next.free >= gcBitsChunkBytes {
-		println("runtime: gcBitsArenas.next.free=", gcBitsArenas.next.free, gcBitsChunkBytes)
+
+	// There's not enough room in the head arena. We may need to
+	// allocate a new arena.
+	lock(&gcBitsArenas.lock)
+	// Try the head arena again, since it may have changed. Now
+	// that we hold the lock, the list head can't change, but its
+	// free position still can.
+	if p := gcBitsArenas.next.tryAlloc(bytesNeeded); p != nil {
+		unlock(&gcBitsArenas.lock)
+		return p
+	}
+
+	// Allocate a new arena. This may temporarily drop the lock.
+	fresh := newArenaMayUnlock()
+	// If newArenaMayUnlock dropped the lock, another thread may
+	// have put a fresh arena on the "next" list. Try allocating
+	// from next again.
+	if p := gcBitsArenas.next.tryAlloc(bytesNeeded); p != nil {
+		// Put fresh back on the free list.
+		// TODO: Mark it "already zeroed"
+		fresh.next = gcBitsArenas.free
+		gcBitsArenas.free = fresh
+		unlock(&gcBitsArenas.lock)
+		return p
+	}
+
+	// Allocate from the fresh arena. We haven't linked it in yet, so
+	// this cannot race and is guaranteed to succeed.
+	p := fresh.tryAlloc(bytesNeeded)
+	if p == nil {
 		throw("markBits overflow")
 	}
-	result := &gcBitsArenas.next.bits[gcBitsArenas.next.free]
-	gcBitsArenas.next.free += bytesNeeded
+
+	// Add the fresh arena to the "next" list.
+	fresh.next = gcBitsArenas.next
+	atomic.StorepNoWB(unsafe.Pointer(&gcBitsArenas.next), unsafe.Pointer(fresh))
+
 	unlock(&gcBitsArenas.lock)
-	return result
+	return p
 }
 
 // newAllocBits returns a pointer to 8 byte aligned bytes
@@ -1403,18 +1452,21 @@ func nextMarkBitArenaEpoch() {
 	}
 	gcBitsArenas.previous = gcBitsArenas.current
 	gcBitsArenas.current = gcBitsArenas.next
-	gcBitsArenas.next = nil // newMarkBits calls newArena when needed
+	atomic.StorepNoWB(unsafe.Pointer(&gcBitsArenas.next), nil) // newMarkBits calls newArena when needed
 	unlock(&gcBitsArenas.lock)
 }
 
-// newArena allocates and zeroes a gcBits arena.
-func newArena() *gcBits {
+// newArenaMayUnlock allocates and zeroes a gcBits arena.
+// The caller must hold gcBitsArena.lock. This may temporarily release it.
+func newArenaMayUnlock() *gcBits {
 	var result *gcBits
 	if gcBitsArenas.free == nil {
+		unlock(&gcBitsArenas.lock)
 		result = (*gcBits)(sysAlloc(gcBitsChunkBytes, &memstats.gc_sys))
 		if result == nil {
 			throw("runtime: cannot allocate memory")
 		}
+		lock(&gcBitsArenas.lock)
 	} else {
 		result = gcBitsArenas.free
 		gcBitsArenas.free = gcBitsArenas.free.next

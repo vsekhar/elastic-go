@@ -32,6 +32,7 @@ package obj
 
 import (
 	"bufio"
+	"cmd/internal/dwarf"
 	"cmd/internal/src"
 	"cmd/internal/sys"
 	"fmt"
@@ -292,7 +293,6 @@ const (
 	ARET
 	ATEXT
 	AUNDEF
-	AUSEFIELD
 	AVARDEF
 	AVARKILL
 	AVARLIVE
@@ -327,15 +327,22 @@ type LSym struct {
 	Attribute
 
 	RefIdx int // Index of this symbol in the symbol reference list.
-	Args   int32
-	Locals int32
 	Size   int64
 	Gotype *LSym
-	Autom  *Auto
-	Text   *Prog
-	Pcln   *Pcln
 	P      []byte
 	R      []Reloc
+
+	// TODO(mdempsky): De-anonymize field.
+	*FuncInfo
+}
+
+// A FuncInfo contains extra fields for STEXT symbols.
+type FuncInfo struct {
+	Args   int32
+	Locals int32
+	Text   *Prog
+	Autom  []*Auto
+	Pcln   Pcln
 }
 
 // Attribute is a set of symbol attributes.
@@ -397,12 +404,14 @@ type Pcln struct {
 	Pcsp        Pcdata
 	Pcfile      Pcdata
 	Pcline      Pcdata
+	Pcinline    Pcdata
 	Pcdata      []Pcdata
 	Funcdata    []*LSym
 	Funcdataoff []int64
 	File        []*LSym
 	Lastfile    *LSym
 	Lastindex   int
+	InlTree     InlTree // per-function inlining tree extracted from the global tree
 }
 
 // A SymKind describes the kind of memory represented by a symbol.
@@ -653,7 +662,7 @@ const (
 	R_ADDRPOWER_PCREL
 
 	// R_ADDRPOWER_TOCREL relocates two D-form instructions like R_ADDRPOWER, but
-	// inserts the offset from the TOC to the address of the the relocated symbol
+	// inserts the offset from the TOC to the address of the relocated symbol
 	// rather than the symbol's address.
 	R_ADDRPOWER_TOCREL
 
@@ -690,7 +699,6 @@ func (r RelocType) IsDirectJump() bool {
 
 type Auto struct {
 	Asym    *LSym
-	Link    *Auto
 	Aoffset int32
 	Name    AddrName
 	Gotype  *LSym
@@ -706,12 +714,6 @@ type Pcdata struct {
 	P []byte
 }
 
-// symbol version, incremented each time a file is loaded.
-// version==1 is reserved for savehist.
-const (
-	HistVersion = 1
-)
-
 // Link holds the context for writing object code from a compiler
 // to be linker input or for reading that input into the linker.
 type Link struct {
@@ -720,7 +722,7 @@ type Link struct {
 	Debugasm      int32
 	Debugvlog     int32
 	Debugdivmod   int32
-	Debugpcln     int32
+	Debugpcln     string
 	Flag_shared   bool
 	Flag_dynlink  bool
 	Flag_optimize bool
@@ -728,8 +730,8 @@ type Link struct {
 	Pathname      string
 	Hash          map[SymVer]*LSym
 	PosTable      src.PosTable
+	InlTree       InlTree // global inlining tree used by gc/inl.go
 	Imports       []string
-	Plists        []*Plist
 	Sym_div       *LSym
 	Sym_divu      *LSym
 	Sym_mod       *LSym
@@ -751,6 +753,7 @@ type Link struct {
 	Armsize       int32
 	Pc            int64
 	DiagFunc      func(string, ...interface{})
+	DebugInfo     func(fn *LSym) []*dwarf.Var
 	Mode          int
 	Cursym        *LSym
 	Version       int

@@ -24,7 +24,7 @@ type ptabEntry struct {
 }
 
 // runtime interface and reflection data structures
-var signatlist []*Node
+var signatlist []*Type
 var itabs []itabEntry
 var ptabs []ptabEntry
 
@@ -115,11 +115,11 @@ func mapbucket(t *Type) *Type {
 	field = append(field, makefield("topbits", arr))
 
 	arr = typArray(keytype, BUCKETSIZE)
-	arr.Noalg = true
+	arr.SetNoalg(true)
 	field = append(field, makefield("keys", arr))
 
 	arr = typArray(valtype, BUCKETSIZE)
-	arr.Noalg = true
+	arr.SetNoalg(true)
 	field = append(field, makefield("values", arr))
 
 	// Make sure the overflow pointer is the last memory in the struct,
@@ -157,8 +157,8 @@ func mapbucket(t *Type) *Type {
 	field = append(field, ovf)
 
 	// link up fields
-	bucket.Noalg = true
-	bucket.Local = t.Local
+	bucket.SetNoalg(true)
+	bucket.SetLocal(t.Local())
 	bucket.SetFields(field[:])
 	dowidth(bucket)
 
@@ -195,8 +195,8 @@ func hmap(t *Type) *Type {
 	}
 
 	h := typ(TSTRUCT)
-	h.Noalg = true
-	h.Local = t.Local
+	h.SetNoalg(true)
+	h.SetLocal(t.Local())
 	h.SetFields(fields)
 	dowidth(h)
 	t.MapType().Hmap = h
@@ -241,7 +241,7 @@ func hiter(t *Type) *Type {
 
 	// build iterator struct holding the above fields
 	i := typ(TSTRUCT)
-	i.Noalg = true
+	i.SetNoalg(true)
 	i.SetFields(field[:])
 	dowidth(i)
 	if i.Width != int64(12*Widthptr) {
@@ -266,7 +266,7 @@ func methodfunc(f *Type, receiver *Type) *Type {
 	for _, t := range f.Params().Fields().Slice() {
 		d = nod(ODCLFIELD, nil, nil)
 		d.Type = t.Type
-		d.Isddd = t.Isddd
+		d.SetIsddd(t.Isddd())
 		in = append(in, d)
 	}
 
@@ -314,7 +314,7 @@ func methods(t *Type) []*Sig {
 		if f.Type.Recv() == nil {
 			Fatalf("receiver with no type on %v method %v %v\n", mt, f.Sym, f)
 		}
-		if f.Nointerface {
+		if f.Nointerface() {
 			continue
 		}
 
@@ -352,8 +352,8 @@ func methods(t *Type) []*Sig {
 		sig.type_ = methodfunc(f.Type, t)
 		sig.mtype = methodfunc(f.Type, nil)
 
-		if sig.isym.Flags&SymSiggen == 0 {
-			sig.isym.Flags |= SymSiggen
+		if !sig.isym.Siggen() {
+			sig.isym.SetSiggen(true)
 			if !eqtype(this, it) || this.Width < Types[Tptr].Width {
 				compiling_wrappers = 1
 				genwrapper(it, f, sig.isym, 1)
@@ -361,8 +361,8 @@ func methods(t *Type) []*Sig {
 			}
 		}
 
-		if sig.tsym.Flags&SymSiggen == 0 {
-			sig.tsym.Flags |= SymSiggen
+		if !sig.tsym.Siggen() {
+			sig.tsym.SetSiggen(true)
 			if !eqtype(this, t) {
 				compiling_wrappers = 1
 				genwrapper(t, f, sig.tsym, 0)
@@ -416,8 +416,8 @@ func imethods(t *Type) []*Sig {
 		// code can refer to it.
 		isym := methodsym(method, t, 0)
 
-		if isym.Flags&SymSiggen == 0 {
-			isym.Flags |= SymSiggen
+		if !isym.Siggen() {
+			isym.SetSiggen(true)
 			genwrapper(t, f, isym, 0)
 		}
 	}
@@ -943,7 +943,7 @@ func typesym(t *Type) *Sym {
 	name := t.tconv(FmtLeft)
 
 	// Use a separate symbol name for Noalg types for #17752.
-	if a, bad := algtype1(t); a == ANOEQ && bad.Noalg {
+	if a, bad := algtype1(t); a == ANOEQ && bad.Noalg() {
 		name = "noalg." + name
 	}
 
@@ -977,7 +977,7 @@ func typenamesym(t *Type) *Sym {
 		n.Typecheck = 1
 		s.Def = n
 
-		signatlist = append(signatlist, typenod(t))
+		signatlist = append(signatlist, t)
 	}
 
 	return s.Def.Sym
@@ -987,8 +987,7 @@ func typename(t *Type) *Node {
 	s := typenamesym(t)
 	n := nod(OADDR, s.Def, nil)
 	n.Type = ptrto(s.Def.Type)
-	n.Addable = true
-	n.Ullman = 2
+	n.SetAddable(true)
 	n.Typecheck = 1
 	return n
 }
@@ -1010,8 +1009,7 @@ func itabname(t, itype *Type) *Node {
 
 	n := nod(OADDR, s.Def, nil)
 	n.Type = ptrto(s.Def.Type)
-	n.Addable = true
-	n.Ullman = 2
+	n.SetAddable(true)
 	n.Typecheck = 1
 	return n
 }
@@ -1123,10 +1121,10 @@ func dtypesym(t *Type) *Sym {
 	}
 
 	s := typesym(t)
-	if s.Flags&SymSiggen != 0 {
+	if s.Siggen() {
 		return s
 	}
-	s.Flags |= SymSiggen
+	s.SetSiggen(true)
 
 	// special case (look for runtime below):
 	// when compiling package runtime,
@@ -1146,7 +1144,7 @@ func dtypesym(t *Type) *Sym {
 	}
 
 	// named types from other files are defined only by those files
-	if tbase.Sym != nil && !tbase.Local {
+	if tbase.Sym != nil && !tbase.Local() {
 		return s
 	}
 	if isforw[tbase.Etype] {
@@ -1192,7 +1190,7 @@ ok:
 		}
 		isddd := false
 		for _, t1 := range t.Params().Fields().Slice() {
-			isddd = t1.Isddd
+			isddd = t1.Isddd()
 			dtypesym(t1.Type)
 		}
 		for _, t1 := range t.Results().Fields().Slice() {
@@ -1384,20 +1382,15 @@ ok:
 func dumptypestructs() {
 	// copy types from externdcl list to signatlist
 	for _, n := range externdcl {
-		if n.Op != OTYPE {
-			continue
+		if n.Op == OTYPE {
+			signatlist = append(signatlist, n.Type)
 		}
-		signatlist = append(signatlist, n)
 	}
 
 	// Process signatlist.  This can't use range, as entries are
 	// added to the list while it is being processed.
 	for i := 0; i < len(signatlist); i++ {
-		n := signatlist[i]
-		if n.Op != OTYPE {
-			continue
-		}
-		t := n.Type
+		t := signatlist[i]
 		dtypesym(t)
 		if t.Sym != nil {
 			dtypesym(ptrto(t))
@@ -1521,10 +1514,10 @@ func dalgsym(t *Type) *Sym {
 
 		s = Pkglookup(p, typepkg)
 
-		if s.Flags&SymAlgGen != 0 {
+		if s.AlgGen() {
 			return s
 		}
-		s.Flags |= SymAlgGen
+		s.SetAlgGen(true)
 
 		// make hash closure
 		p = fmt.Sprintf(".hashfunc%d", t.Width)
@@ -1630,8 +1623,8 @@ func dgcptrmask(t *Type) *Sym {
 	p := fmt.Sprintf("gcbits.%x", ptrmask)
 
 	sym := Pkglookup(p, Runtimepkg)
-	if sym.Flags&SymUniq == 0 {
-		sym.Flags |= SymUniq
+	if !sym.Uniq() {
+		sym.SetUniq(true)
 		for i, x := range ptrmask {
 			duint8(sym, i, x)
 		}
@@ -1789,7 +1782,7 @@ func zeroaddr(size int64) *Node {
 	}
 	z := nod(OADDR, s.Def, nil)
 	z.Type = ptrto(Types[TUINT8])
-	z.Addable = true
+	z.SetAddable(true)
 	z.Typecheck = 1
 	return z
 }

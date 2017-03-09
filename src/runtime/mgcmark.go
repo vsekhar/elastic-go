@@ -201,6 +201,11 @@ func markroot(gcw *gcWork, i uint32) {
 		}
 
 	case i == fixedRootFinalizers:
+		// Only do this once per GC cycle since we don't call
+		// queuefinalizer during marking.
+		if work.markrootDone {
+			break
+		}
 		for fb := allfin; fb != nil; fb = fb.alllink {
 			cnt := uintptr(atomic.Load(&fb.cnt))
 			scanblock(uintptr(unsafe.Pointer(&fb.fin[0])), cnt*unsafe.Sizeof(fb.fin[0]), &finptrmask[0], gcw)
@@ -1225,6 +1230,7 @@ func greyobject(obj, base, off uintptr, hbits heapBits, span *mspan, gcw *gcWork
 			// Dump the object
 			gcDumpObject("obj", obj, ^uintptr(0))
 
+			getg().m.traceback = 2
 			throw("checkmark found unmarked object")
 		}
 		if hbits.isCheckmarked(span.elemsize) {
@@ -1239,6 +1245,7 @@ func greyobject(obj, base, off uintptr, hbits heapBits, span *mspan, gcw *gcWork
 			print("runtime: marking free object ", hex(obj), " found at *(", hex(base), "+", hex(off), ")\n")
 			gcDumpObject("base", base, off)
 			gcDumpObject("obj", obj, ^uintptr(0))
+			getg().m.traceback = 2
 			throw("marking free object")
 		}
 

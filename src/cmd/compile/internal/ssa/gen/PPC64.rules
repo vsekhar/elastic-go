@@ -49,10 +49,6 @@
 (Hmul64u  x y) -> (MULHDU x y)
 (Hmul32  x y) -> (MULHW  x y)
 (Hmul32u  x y) -> (MULHWU x y)
-(Hmul16 x y) -> (SRAWconst (MULLW <config.fe.TypeInt32()> (SignExt16to32 x) (SignExt16to32 y)) [16])
-(Hmul16u x y) -> (SRWconst (MULLW <config.fe.TypeUInt32()> (ZeroExt16to32 x) (ZeroExt16to32 y)) [16])
-(Hmul8 x y) -> (SRAWconst (MULLW <config.fe.TypeInt16()> (SignExt8to32 x) (SignExt8to32 y)) [8])
-(Hmul8u x y) -> (SRWconst (MULLW <config.fe.TypeUInt16()> (ZeroExt8to32 x) (ZeroExt8to32 y)) [8])
 
 (Mul32F x y) -> (FMULS x y)
 (Mul64F x y) -> (FMUL x y)
@@ -73,6 +69,9 @@
 
 (Cvt32Fto64F x) -> x // Note x will have the wrong type for patterns dependent on Float32/Float64
 (Cvt64Fto32F x) -> (FRSP x)
+
+(Round32F x) -> x
+(Round64F x) -> x
 
 (Sqrt x) -> (FSQRT x)
 
@@ -767,6 +766,27 @@
     (MOVHstorezero [off1+off2] {mergeSym(sym1,sym2)} x mem)
 (MOVBstorezero [off1] {sym1} (MOVDaddr [off2] {sym2} x) mem) && canMergeSym(sym1,sym2) ->
     (MOVBstorezero [off1+off2] {mergeSym(sym1,sym2)} x mem)
+
+// atomic intrinsics
+(AtomicLoad32  ptr mem) -> (LoweredAtomicLoad32 ptr mem)
+(AtomicLoad64  ptr mem) -> (LoweredAtomicLoad64 ptr mem)
+(AtomicLoadPtr ptr mem) -> (LoweredAtomicLoadPtr ptr mem)
+
+(AtomicStore32      ptr val mem) -> (LoweredAtomicStore32 ptr val mem)
+(AtomicStore64      ptr val mem) -> (LoweredAtomicStore64 ptr val mem)
+//(AtomicStorePtrNoWB ptr val mem) -> (STLR  ptr val mem)
+
+(AtomicExchange32 ptr val mem) -> (LoweredAtomicExchange32 ptr val mem)
+(AtomicExchange64 ptr val mem) -> (LoweredAtomicExchange64 ptr val mem)
+
+(AtomicAdd32 ptr val mem) -> (LoweredAtomicAdd32 ptr val mem)
+(AtomicAdd64 ptr val mem) -> (LoweredAtomicAdd64 ptr val mem)
+
+(AtomicCompareAndSwap32 ptr old new_ mem) -> (LoweredAtomicCas32 ptr old new_ mem)
+(AtomicCompareAndSwap64 ptr old new_ mem) -> (LoweredAtomicCas64 ptr old new_ mem)
+
+(AtomicAnd8 ptr val mem) -> (LoweredAtomicAnd8 ptr val mem)
+(AtomicOr8  ptr val mem) -> (LoweredAtomicOr8  ptr val mem)
 
 // Lowering extension
 // Note: we always extend to 64 bits even though some ops don't need that many result bits.

@@ -6,6 +6,7 @@ package gc
 
 import (
 	"cmd/internal/src"
+	"math/big"
 	"strings"
 )
 
@@ -115,9 +116,18 @@ type NilVal struct{}
 // n must be an integer or rune constant.
 func (n *Node) Int64() int64 {
 	if !Isconst(n, CTINT) {
-		Fatalf("Int(%v)", n)
+		Fatalf("Int64(%v)", n)
 	}
 	return n.Val().U.(*Mpint).Int64()
+}
+
+// Bool returns n as a bool.
+// n must be a boolean constant.
+func (n *Node) Bool() bool {
+	if !Isconst(n, CTBOOL) {
+		Fatalf("Bool(%v)", n)
+	}
+	return n.Val().U.(bool)
 }
 
 // truncate float literal fv to 32-bit or 64-bit precision
@@ -362,11 +372,11 @@ func convlit1(n *Node, t *Type, explicit bool, reuse canReuseNode) *Node {
 	return n
 
 bad:
-	if !n.Diag {
-		if !t.Broke {
+	if !n.Diag() {
+		if !t.Broke() {
 			yyerror("cannot convert %v to type %v", n, t)
 		}
-		n.Diag = true
+		n.SetDiag(true)
 	}
 
 	if n.Type.IsUntyped() {
@@ -446,19 +456,33 @@ func toint(v Val) Val {
 
 	case *Mpflt:
 		i := new(Mpint)
-		if i.SetFloat(u) < 0 {
-			msg := "constant %v truncated to integer"
-			// provide better error message if SetFloat failed because f was too large
-			if u.Val.IsInt() {
-				msg = "constant %v overflows integer"
+		if !i.SetFloat(u) {
+			if i.Ovf {
+				yyerror("integer too large")
+			} else {
+				// The value of u cannot be represented as an integer;
+				// so we need to print an error message.
+				// Unfortunately some float values cannot be
+				// reasonably formatted for inclusion in an error
+				// message (example: 1 + 1e-100), so first we try to
+				// format the float; if the truncation resulted in
+				// something that looks like an integer we omit the
+				// value from the error message.
+				// (See issue #11371).
+				var t big.Float
+				t.Parse(fconv(u, FmtSharp), 10)
+				if t.IsInt() {
+					yyerror("constant truncated to integer")
+				} else {
+					yyerror("constant %v truncated to integer", fconv(u, FmtSharp))
+				}
 			}
-			yyerror(msg, fconv(u, FmtSharp))
 		}
 		v.U = i
 
 	case *Mpcplx:
 		i := new(Mpint)
-		if i.SetFloat(&u.Real) < 0 || u.Imag.CmpFloat64(0) != 0 {
+		if !i.SetFloat(&u.Real) || u.Imag.CmpFloat64(0) != 0 {
 			yyerror("constant %v%vi truncated to integer", fconv(&u.Real, FmtSharp), fconv(&u.Imag, FmtSharp|FmtSign))
 		}
 
@@ -693,9 +717,9 @@ func evconst(n *Node) {
 
 		switch uint32(n.Op)<<16 | uint32(v.Ctype()) {
 		default:
-			if !n.Diag {
+			if !n.Diag() {
 				yyerror("illegal constant expression %v %v", n.Op, nl.Type)
-				n.Diag = true
+				n.SetDiag(true)
 			}
 			return
 
@@ -710,6 +734,7 @@ func evconst(n *Node) {
 		case OCONV_ | CTINT_,
 			OCONV_ | CTRUNE_,
 			OCONV_ | CTFLT_,
+			OCONV_ | CTCPLX_,
 			OCONV_ | CTSTR_,
 			OCONV_ | CTBOOL_:
 			nl = convlit1(nl, n.Type, true, false)
@@ -954,9 +979,9 @@ func evconst(n *Node) {
 	// The default case above would print 'ideal % ideal',
 	// which is not quite an ideal error.
 	case OMOD_ | CTFLT_:
-		if !n.Diag {
+		if !n.Diag() {
 			yyerror("illegal constant expression: floating-point %% operation")
-			n.Diag = true
+			n.SetDiag(true)
 		}
 
 		return
@@ -1180,9 +1205,9 @@ setfalse:
 	return
 
 illegal:
-	if !n.Diag {
+	if !n.Diag() {
 		yyerror("illegal constant expression: %v %v %v", nl.Type, n.Op, nr.Type)
-		n.Diag = true
+		n.SetDiag(true)
 	}
 }
 
@@ -1321,9 +1346,9 @@ func defaultlitreuse(n *Node, t *Type, reuse canReuseNode) *Node {
 
 		if n.Val().Ctype() == CTNIL {
 			lineno = lno
-			if !n.Diag {
+			if !n.Diag() {
 				yyerror("use of untyped nil")
-				n.Diag = true
+				n.SetDiag(true)
 			}
 
 			n.Type = nil

@@ -156,7 +156,6 @@ func opregregimm(op obj.As, dest, src int16, off int64) *obj.Prog {
 }
 
 func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
-	s.SetPos(v.Pos)
 	switch v.Op {
 	case ssa.OpS390XSLD, ssa.OpS390XSLW,
 		ssa.OpS390XSRD, ssa.OpS390XSRW,
@@ -193,6 +192,20 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 			v.Fatalf("input[0] and output not in same register %s", v.LongString())
 		}
 		opregreg(v.Op.Asm(), r, v.Args[1].Reg())
+	case ssa.OpS390XFMADD, ssa.OpS390XFMADDS,
+		ssa.OpS390XFMSUB, ssa.OpS390XFMSUBS:
+		r := v.Reg()
+		if r != v.Args[0].Reg() {
+			v.Fatalf("input[0] and output not in same register %s", v.LongString())
+		}
+		r1 := v.Args[1].Reg()
+		r2 := v.Args[2].Reg()
+		p := gc.Prog(v.Op.Asm())
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = r1
+		p.Reg = r2
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = r
 	case ssa.OpS390XDIVD, ssa.OpS390XDIVW,
 		ssa.OpS390XDIVDU, ssa.OpS390XDIVWU,
 		ssa.OpS390XMODD, ssa.OpS390XMODW,
@@ -456,15 +469,11 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Type = obj.TYPE_REG
 		p.From.Reg = v.Args[0].Reg()
 		gc.AddrAuto(&p.To, v)
-	case ssa.OpPhi:
-		gc.CheckLoweredPhi(v)
-	case ssa.OpInitMem:
-		// memory arg needs no code
-	case ssa.OpArg:
-		// input args need no code
 	case ssa.OpS390XLoweredGetClosurePtr:
 		// Closure pointer is R12 (already)
 		gc.CheckLoweredGetClosurePtr(v)
+	case ssa.OpS390XLoweredRound32F, ssa.OpS390XLoweredRound64F:
+		// input is already rounded
 	case ssa.OpS390XLoweredGetG:
 		r := v.Reg()
 		p := gc.Prog(s390x.AMOVD)
@@ -549,18 +558,6 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Reg = v.Args[0].Reg()
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
-	case ssa.OpSP, ssa.OpSB:
-		// nothing to do
-	case ssa.OpSelect0, ssa.OpSelect1:
-		// nothing to do
-	case ssa.OpVarDef:
-		gc.Gvardef(v.Aux.(*gc.Node))
-	case ssa.OpVarKill:
-		gc.Gvarkill(v.Aux.(*gc.Node))
-	case ssa.OpVarLive:
-		gc.Gvarlive(v.Aux.(*gc.Node))
-	case ssa.OpKeepAlive:
-		gc.KeepAlive(v)
 	case ssa.OpS390XInvertFlags:
 		v.Fatalf("InvertFlags should never make it to codegen %v", v.LongString())
 	case ssa.OpS390XFlagEQ, ssa.OpS390XFlagLT, ssa.OpS390XFlagGT:

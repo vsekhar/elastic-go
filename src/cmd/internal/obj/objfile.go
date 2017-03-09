@@ -15,7 +15,7 @@
 //
 // The file format is:
 //
-//	- magic header: "\x00\x00go17ld"
+//	- magic header: "\x00\x00go19ld"
 //	- byte 1 - version number
 //	- sequence of strings giving dependencies (imported packages)
 //	- empty string (marks end of sequence)
@@ -31,7 +31,7 @@
 //	- data, the content of the defined symbols
 //	- sequence of defined symbols
 //	- byte 0xff (marks end of sequence)
-//	- magic footer: "\xff\xffgo17ld"
+//	- magic footer: "\xff\xffgo19ld"
 //
 // All integers are stored in a zigzag varint format.
 // See golang.org/s/go12symtab for a definition.
@@ -94,6 +94,7 @@
 //	- pcsp [data block]
 //	- pcfile [data block]
 //	- pcline [data block]
+//	- pcinline [data block]
 //	- npcdata [int]
 //	- pcdata [npcdata data blocks]
 //	- nfuncdata [int]
@@ -101,6 +102,8 @@
 //	- funcdatasym [nfuncdata ints]
 //	- nfile [int]
 //	- file [nfile symref index]
+//	- ninlinedcall [int]
+//	- inlinedcall [ninlinedcall int symref int symref]
 //
 // The file layout and meaning of type integers are architecture-independent.
 //
@@ -119,14 +122,6 @@ import (
 	"sort"
 )
 
-// The Go and C compilers, and the assembler, call writeobj to write
-// out a Go object file. The linker does not call this; the linker
-// does not write out object files.
-func Writeobjdirect(ctxt *Link, b *bufio.Writer) {
-	Flushplist(ctxt)
-	WriteObjFile(ctxt, b)
-}
-
 // objWriter writes Go object files.
 type objWriter struct {
 	wr   *bufio.Writer
@@ -134,7 +129,7 @@ type objWriter struct {
 	// Temporary buffer for zigzag int writing.
 	varintbuf [10]uint8
 
-	// Provide the the index of a symbol reference by symbol name.
+	// Provide the index of a symbol reference by symbol name.
 	// One map for versioned symbols and one for unversioned symbols.
 	// Used for deduplicating the symbol reference list.
 	refIdx  map[string]int
@@ -158,12 +153,13 @@ func (w *objWriter) addLengths(s *LSym) {
 		return
 	}
 
-	pc := s.Pcln
+	pc := &s.Pcln
 
 	data := 0
 	data += len(pc.Pcsp.P)
 	data += len(pc.Pcfile.P)
 	data += len(pc.Pcline.P)
+	data += len(pc.Pcinline.P)
 	for i := 0; i < len(pc.Pcdata); i++ {
 		data += len(pc.Pcdata[i].P)
 	}
@@ -171,11 +167,7 @@ func (w *objWriter) addLengths(s *LSym) {
 	w.nData += data
 	w.nPcdata += len(pc.Pcdata)
 
-	autom := 0
-	for a := s.Autom; a != nil; a = a.Link {
-		autom++
-	}
-	w.nAutom += autom
+	w.nAutom += len(s.Autom)
 	w.nFuncdata += len(pc.Funcdataoff)
 	w.nFile += len(pc.File)
 }
@@ -202,7 +194,7 @@ func WriteObjFile(ctxt *Link, b *bufio.Writer) {
 	w := newObjWriter(ctxt, b)
 
 	// Magic header
-	w.wr.WriteString("\x00\x00go17ld")
+	w.wr.WriteString("\x00\x00go19ld")
 
 	// Version
 	w.wr.WriteByte(1)
@@ -231,10 +223,11 @@ func WriteObjFile(ctxt *Link, b *bufio.Writer) {
 	// Data block
 	for _, s := range ctxt.Text {
 		w.wr.Write(s.P)
-		pc := s.Pcln
+		pc := &s.Pcln
 		w.wr.Write(pc.Pcsp.P)
 		w.wr.Write(pc.Pcfile.P)
 		w.wr.Write(pc.Pcline.P)
+		w.wr.Write(pc.Pcinline.P)
 		for i := 0; i < len(pc.Pcdata); i++ {
 			w.wr.Write(pc.Pcdata[i].P)
 		}
@@ -252,7 +245,7 @@ func WriteObjFile(ctxt *Link, b *bufio.Writer) {
 	}
 
 	// Magic footer
-	w.wr.WriteString("\xff\xffgo17ld")
+	w.wr.WriteString("\xff\xffgo19ld")
 }
 
 // Symbols are prefixed so their content doesn't get confused with the magic footer.
@@ -297,15 +290,20 @@ func (w *objWriter) writeRefs(s *LSym) {
 	}
 
 	if s.Type == STEXT {
-		for a := s.Autom; a != nil; a = a.Link {
+		for _, a := range s.Autom {
 			w.writeRef(a.Asym, false)
 			w.writeRef(a.Gotype, false)
 		}
-		pc := s.Pcln
+		pc := &s.Pcln
 		for _, d := range pc.Funcdata {
 			w.writeRef(d, false)
 		}
 		for _, f := range pc.File {
+			w.writeRef(f, true)
+		}
+		for _, call := range pc.InlTree.nodes {
+			w.writeRef(call.Func, false)
+			f, _ := linkgetlineFromPos(w.ctxt, call.Pos)
 			w.writeRef(f, true)
 		}
 	}
@@ -336,15 +334,15 @@ func (w *objWriter) writeSymDebug(s *LSym) {
 			fmt.Fprintf(ctxt.Bso, " leaf")
 		}
 	}
-
 	fmt.Fprintf(ctxt.Bso, "\n")
-	for p := s.Text; p != nil; p = p.Link {
-		fmt.Fprintf(ctxt.Bso, "\t%#04x %v\n", uint(int(p.Pc)), p)
+	if s.Type == STEXT {
+		for p := s.Text; p != nil; p = p.Link {
+			fmt.Fprintf(ctxt.Bso, "\t%#04x %v\n", uint(int(p.Pc)), p)
+		}
 	}
-	var c int
-	var j int
-	for i := 0; i < len(s.P); {
+	for i := 0; i < len(s.P); i += 16 {
 		fmt.Fprintf(ctxt.Bso, "\t%#04x", uint(i))
+		j := i
 		for j = i; j < i+16 && j < len(s.P); j++ {
 			fmt.Fprintf(ctxt.Bso, " %02x", s.P[j])
 		}
@@ -353,7 +351,7 @@ func (w *objWriter) writeSymDebug(s *LSym) {
 		}
 		fmt.Fprintf(ctxt.Bso, "  ")
 		for j = i; j < i+16 && j < len(s.P); j++ {
-			c = int(s.P[j])
+			c := int(s.P[j])
 			if ' ' <= c && c <= 0x7e {
 				fmt.Fprintf(ctxt.Bso, "%c", c)
 			} else {
@@ -362,7 +360,6 @@ func (w *objWriter) writeSymDebug(s *LSym) {
 		}
 
 		fmt.Fprintf(ctxt.Bso, "\n")
-		i += 16
 	}
 
 	sort.Sort(relocByOff(s.R)) // generate stable output
@@ -438,12 +435,8 @@ func (w *objWriter) writeSym(s *LSym) {
 		flags |= 1 << 2
 	}
 	w.writeInt(flags)
-	n := 0
-	for a := s.Autom; a != nil; a = a.Link {
-		n++
-	}
-	w.writeInt(int64(n))
-	for a := s.Autom; a != nil; a = a.Link {
+	w.writeInt(int64(len(s.Autom)))
+	for _, a := range s.Autom {
 		w.writeRefIndex(a.Asym)
 		w.writeInt(int64(a.Aoffset))
 		if a.Name == NAME_AUTO {
@@ -456,10 +449,11 @@ func (w *objWriter) writeSym(s *LSym) {
 		w.writeRefIndex(a.Gotype)
 	}
 
-	pc := s.Pcln
+	pc := &s.Pcln
 	w.writeInt(int64(len(pc.Pcsp.P)))
 	w.writeInt(int64(len(pc.Pcfile.P)))
 	w.writeInt(int64(len(pc.Pcline.P)))
+	w.writeInt(int64(len(pc.Pcinline.P)))
 	w.writeInt(int64(len(pc.Pcdata)))
 	for i := 0; i < len(pc.Pcdata); i++ {
 		w.writeInt(int64(len(pc.Pcdata[i].P)))
@@ -474,6 +468,14 @@ func (w *objWriter) writeSym(s *LSym) {
 	w.writeInt(int64(len(pc.File)))
 	for _, f := range pc.File {
 		w.writeRefIndex(f)
+	}
+	w.writeInt(int64(len(pc.InlTree.nodes)))
+	for _, call := range pc.InlTree.nodes {
+		w.writeInt(int64(call.Parent))
+		f, l := linkgetlineFromPos(w.ctxt, call.Pos)
+		w.writeRefIndex(f)
+		w.writeInt(int64(l))
+		w.writeRefIndex(call.Func)
 	}
 }
 
@@ -549,60 +551,19 @@ func (c dwCtxt) AddSectionOffset(s dwarf.Sym, size int, t interface{}, ofs int64
 	r.Type = R_DWARFREF
 }
 
-func gendwarf(ctxt *Link, text []*LSym) []*LSym {
-	dctxt := dwCtxt{ctxt}
-	var dw []*LSym
-
-	for _, s := range text {
-		dsym := Linklookup(ctxt, dwarf.InfoPrefix+s.Name, int(s.Version))
-		if dsym.Size != 0 {
-			continue
-		}
-		dw = append(dw, dsym)
-		dsym.Type = SDWARFINFO
-		dsym.Set(AttrDuplicateOK, s.DuplicateOK())
-		var vars []*dwarf.Var
-		var abbrev int
-		var offs int32
-		for a := s.Autom; a != nil; a = a.Link {
-			switch a.Name {
-			case NAME_AUTO:
-				abbrev = dwarf.DW_ABRV_AUTO
-				offs = a.Aoffset
-				if ctxt.FixedFrameSize() == 0 {
-					offs -= int32(ctxt.Arch.PtrSize)
-				}
-				if Framepointer_enabled(GOOS, GOARCH) {
-					offs -= int32(ctxt.Arch.PtrSize)
-				}
-
-			case NAME_PARAM:
-				abbrev = dwarf.DW_ABRV_PARAM
-				offs = a.Aoffset + int32(ctxt.FixedFrameSize())
-
-			default:
-				continue
-			}
-
-			typename := dwarf.InfoPrefix + a.Gotype.Name[len("type."):]
-			vars = append(vars, &dwarf.Var{
-				Name:   a.Asym.Name,
-				Abbrev: abbrev,
-				Offset: offs,
-				Type:   Linklookup(ctxt, typename, 0),
-			})
-		}
-
-		// We want to sort variables by offset, breaking ties
-		// with declaration order. Autom holds variables in
-		// reverse declaration order, so we reverse the
-		// assembled slice and then apply a stable sort.
-		for i, j := 0, len(vars)-1; i < j; i, j = i+1, j-1 {
-			vars[i], vars[j] = vars[j], vars[i]
-		}
-		sort.Stable(dwarf.VarsByOffset(vars))
-
-		dwarf.PutFunc(dctxt, dsym, s.Name, s.Version == 0, s, s.Size, vars)
+// makeFuncDebugEntry makes a DWARF Debugging Information Entry
+// for TEXT symbol s.
+func makeFuncDebugEntry(ctxt *Link, s *LSym) {
+	dsym := Linklookup(ctxt, dwarf.InfoPrefix+s.Name, int(s.Version))
+	if dsym.Size != 0 {
+		return
 	}
-	return dw
+	dsym.Type = SDWARFINFO
+	dsym.Set(AttrDuplicateOK, s.DuplicateOK())
+	var vars []*dwarf.Var
+	if ctxt.DebugInfo != nil {
+		vars = ctxt.DebugInfo(s)
+	}
+	dwarf.PutFunc(dwCtxt{ctxt}, dsym, s.Name, s.Version == 0, s, s.Size, vars)
+	ctxt.Data = append(ctxt.Data, dsym)
 }

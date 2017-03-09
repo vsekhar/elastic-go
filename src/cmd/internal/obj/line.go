@@ -76,28 +76,9 @@ func (ctxt *Link) AddImport(pkg string) {
 
 func linkgetlineFromPos(ctxt *Link, xpos src.XPos) (f *LSym, l int32) {
 	pos := ctxt.PosTable.Pos(xpos)
-	filename := pos.AbsFilename()
-	if !pos.IsKnown() || filename == "" {
-		return Linklookup(ctxt, "??", HistVersion), 0
+	if !pos.IsKnown() {
+		pos = src.Pos{}
 	}
 	// TODO(gri) Should this use relative or absolute line number?
-	return Linklookup(ctxt, filename, HistVersion), int32(pos.RelLine())
-}
-
-func fieldtrack(ctxt *Link, cursym *LSym) {
-	p := cursym.Text
-	if p == nil || p.Link == nil { // handle external functions and ELF section symbols
-		return
-	}
-	ctxt.Cursym = cursym
-
-	for ; p != nil; p = p.Link {
-		if p.As == AUSEFIELD {
-			r := Addrel(ctxt.Cursym)
-			r.Off = 0
-			r.Siz = 0
-			r.Sym = p.From.Sym
-			r.Type = R_USEFIELD
-		}
-	}
+	return Linklookup(ctxt, pos.SymFilename(), 0), int32(pos.RelLine())
 }

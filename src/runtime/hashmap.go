@@ -498,10 +498,12 @@ func mapassign(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	if h.flags&hashWriting != 0 {
 		throw("concurrent map writes")
 	}
-	h.flags |= hashWriting
-
 	alg := t.key.alg
 	hash := alg.hash(key, uintptr(h.hash0))
+
+	// Set hashWriting after calling alg.hash, since alg.hash may panic,
+	// in which case we have not actually done a write.
+	h.flags |= hashWriting
 
 	if h.buckets == nil {
 		h.buckets = newarray(t.bucket, 1)
@@ -611,10 +613,14 @@ func mapdelete(t *maptype, h *hmap, key unsafe.Pointer) {
 	if h.flags&hashWriting != 0 {
 		throw("concurrent map writes")
 	}
-	h.flags |= hashWriting
 
 	alg := t.key.alg
 	hash := alg.hash(key, uintptr(h.hash0))
+
+	// Set hashWriting after calling alg.hash, since alg.hash may panic,
+	// in which case we have not actually done a write (delete).
+	h.flags |= hashWriting
+
 	bucket := hash & (uintptr(1)<<h.B - 1)
 	if h.growing() {
 		growWork(t, h, bucket)
@@ -958,6 +964,11 @@ func growWork(t *maptype, h *hmap, bucket uintptr) {
 	}
 }
 
+func bucketEvacuated(t *maptype, h *hmap, bucket uintptr) bool {
+	b := (*bmap)(add(h.oldbuckets, bucket*uintptr(t.bucketsize)))
+	return evacuated(b)
+}
+
 func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 	b := (*bmap)(add(h.oldbuckets, oldbucket*uintptr(t.bucketsize)))
 	newbit := h.noldbuckets()
@@ -1098,7 +1109,16 @@ func evacuate(t *maptype, h *hmap, oldbucket uintptr) {
 	// Advance evacuation mark
 	if oldbucket == h.nevacuate {
 		h.nevacuate = oldbucket + 1
-		if oldbucket+1 == newbit { // newbit == # of oldbuckets
+		// Experiments suggest that 1024 is overkill by at least an order of magnitude.
+		// Put it in there as a safeguard anyway, to ensure O(1) behavior.
+		stop := h.nevacuate + 1024
+		if stop > newbit {
+			stop = newbit
+		}
+		for h.nevacuate != stop && bucketEvacuated(t, h, h.nevacuate) {
+			h.nevacuate++
+		}
+		if h.nevacuate == newbit { // newbit == # of oldbuckets
 			// Growing is all done. Free old main bucket array.
 			h.oldbuckets = nil
 			// Can discard old overflow buckets as well.

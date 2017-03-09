@@ -425,6 +425,7 @@ func heapBitsForObject(p, refBase, refOff uintptr) (base uintptr, hbits heapBits
 				print("runtime: found in object at *(", hex(refBase), "+", hex(refOff), ")\n")
 				gcDumpObject("object", refBase, refOff)
 			}
+			getg().m.traceback = 2
 			throw("found bad pointer in Go heap (incorrect use of unsafe or cgo?)")
 		}
 		return
@@ -823,10 +824,10 @@ var oneBitCount = [256]uint8{
 	4, 5, 5, 6, 5, 6, 6, 7,
 	5, 6, 6, 7, 6, 7, 7, 8}
 
-// countFree runs through the mark bits in a span and counts the number of free objects
-// in the span.
+// countAlloc returns the number of objects allocated in span s by
+// scanning the allocation bitmap.
 // TODO:(rlh) Use popcount intrinsic.
-func (s *mspan) countFree() int {
+func (s *mspan) countAlloc() int {
 	count := 0
 	maxIndex := s.nelems / 8
 	for i := uintptr(0); i < maxIndex; i++ {
@@ -839,7 +840,7 @@ func (s *mspan) countFree() int {
 		bits := mrkBits & mask
 		count += int(oneBitCount[bits])
 	}
-	return int(s.nelems) - count
+	return count
 }
 
 // heapBitsSetType records that the new allocation [x, x+size)
@@ -1877,7 +1878,7 @@ func getgcmask(ep interface{}) (mask []byte) {
 		frame.sp = uintptr(p)
 		_g_ := getg()
 		gentraceback(_g_.m.curg.sched.pc, _g_.m.curg.sched.sp, 0, _g_.m.curg, 0, nil, 1000, getgcmaskcb, noescape(unsafe.Pointer(&frame)), 0)
-		if frame.fn != nil {
+		if frame.fn.valid() {
 			f := frame.fn
 			targetpc := frame.continpc
 			if targetpc == 0 {

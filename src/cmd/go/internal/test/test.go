@@ -907,12 +907,8 @@ func builderTest(b *work.Builder, p *load.Package) (buildAction, runAction, prin
 
 	if cfg.BuildContext.GOOS == "darwin" {
 		if cfg.BuildContext.GOARCH == "arm" || cfg.BuildContext.GOARCH == "arm64" {
-			t.IsIOS = true
-			t.NeedOS = true
+			t.NeedCgo = true
 		}
-	}
-	if t.TestMain == nil {
-		t.NeedOS = true
 	}
 
 	for _, cp := range pmain.Internal.Imports {
@@ -1360,8 +1356,7 @@ type testFuncs struct {
 	NeedTest    bool
 	ImportXtest bool
 	NeedXtest   bool
-	NeedOS      bool
-	IsIOS       bool
+	NeedCgo     bool
 	Cover       []coverInfo
 }
 
@@ -1475,7 +1470,7 @@ var testmainTmpl = template.Must(template.New("main").Parse(`
 package main
 
 import (
-{{if .NeedOS}}
+{{if not .TestMain}}
 	"os"
 {{end}}
 	"testing"
@@ -1491,10 +1486,8 @@ import (
 	_cover{{$i}} {{$p.Package.ImportPath | printf "%q"}}
 {{end}}
 
-{{if .IsIOS}}
-	"os/signal"
+{{if .NeedCgo}}
 	_ "runtime/cgo"
-	"syscall"
 {{end}}
 )
 
@@ -1560,32 +1553,6 @@ func coverRegisterFile(fileName string, counter []uint32, pos []uint32, numStmts
 {{end}}
 
 func main() {
-{{if .IsIOS}}
-	// Send a SIGUSR2, which will be intercepted by LLDB to
-	// tell the test harness that installation was successful.
-	// See misc/ios/go_darwin_arm_exec.go.
-	signal.Notify(make(chan os.Signal), syscall.SIGUSR2)
-	syscall.Kill(0, syscall.SIGUSR2)
-	signal.Reset(syscall.SIGUSR2)
-
-	// The first argument supplied to an iOS test is an offset
-	// suffix for the current working directory.
-	// Process it here, and remove it from os.Args.
-	const hdr = "cwdSuffix="
-	if len(os.Args) < 2 || len(os.Args[1]) <= len(hdr) || os.Args[1][:len(hdr)] != hdr {
-		panic("iOS test not passed a working directory suffix")
-	}
-	suffix := os.Args[1][len(hdr):]
-	dir, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-	if err := os.Chdir(dir + "/" + suffix); err != nil {
-		panic(err)
-	}
-	os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
-{{end}}
-
 {{if .CoverEnabled}}
 	testing.RegisterCover(testing.Cover{
 		Mode: {{printf "%q" .CoverMode}},

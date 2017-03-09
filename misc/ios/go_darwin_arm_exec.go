@@ -107,7 +107,7 @@ func main() {
 	// Approximately 1 in a 100 binaries fail to start. If it happens,
 	// try again. These failures happen for several reasons beyond
 	// our control, but all of them are safe to retry as they happen
-	// before lldb encounters the initial SIGUSR2 stop. As we
+	// before lldb encounters the initial getwd breakpoint. As we
 	// know the tests haven't started, we are not hiding flaky tests
 	// with this retry.
 	for i := 0; i < 5; i++ {
@@ -147,19 +147,19 @@ func run(bin string, args []string) (err error) {
 		return err
 	}
 
+	pkgpath, err := copyLocalData(appdir)
+	if err != nil {
+		return err
+	}
+
 	entitlementsPath := filepath.Join(tmpdir, "Entitlements.plist")
 	if err := ioutil.WriteFile(entitlementsPath, []byte(entitlementsPlist()), 0744); err != nil {
 		return err
 	}
-	if err := ioutil.WriteFile(filepath.Join(appdir, "Info.plist"), []byte(infoPlist()), 0744); err != nil {
+	if err := ioutil.WriteFile(filepath.Join(appdir, "Info.plist"), []byte(infoPlist(pkgpath)), 0744); err != nil {
 		return err
 	}
 	if err := ioutil.WriteFile(filepath.Join(appdir, "ResourceRules.plist"), []byte(resourceRules), 0744); err != nil {
-		return err
-	}
-
-	pkgpath, err := copyLocalData(appdir)
-	if err != nil {
 		return err
 	}
 
@@ -212,11 +212,6 @@ func run(bin string, args []string) (err error) {
 	var opts options
 	opts, args = parseArgs(args)
 
-	// Pass the suffix for the current working directory as the
-	// first argument to the test. For iOS, cmd/go generates
-	// special handling of this argument.
-	args = append([]string{"cwdSuffix=" + pkgpath}, args...)
-
 	// ios-deploy invokes lldb to give us a shell session with the app.
 	s, err := newSession(appdir, args, opts)
 	if err != nil {
@@ -237,7 +232,6 @@ func run(bin string, args []string) (err error) {
 	s.do(`process handle SIGHUP  --stop false --pass true --notify false`)
 	s.do(`process handle SIGPIPE --stop false --pass true --notify false`)
 	s.do(`process handle SIGUSR1 --stop false --pass true --notify false`)
-	s.do(`process handle SIGUSR2 --stop true --pass false --notify true`) // sent by test harness
 	s.do(`process handle SIGCONT --stop false --pass true --notify false`)
 	s.do(`process handle SIGSEGV --stop false --pass true --notify false`) // does not work
 	s.do(`process handle SIGBUS  --stop false --pass true --notify false`) // does not work
@@ -252,7 +246,7 @@ func run(bin string, args []string) (err error) {
 
 	started = true
 
-	s.doCmd("run", "stop reason = signal SIGUSR2", 20*time.Second)
+	s.doCmd("run", "stop reason = signal SIGINT", 20*time.Second)
 
 	startTestsLen := s.out.Len()
 	fmt.Fprintln(s.in, `process continue`)
@@ -525,11 +519,13 @@ func copyLocalData(dstbase string) (pkgpath string, err error) {
 
 	// Copy timezone file.
 	//
-	// Apps have the zoneinfo.zip in the root of their app bundle,
+	// Typical apps have the zoneinfo.zip in the root of their app bundle,
 	// read by the time package as the working directory at initialization.
+	// As we move the working directory to the GOROOT pkg directory, we
+	// install the zoneinfo.zip file in the pkgpath.
 	if underGoRoot {
 		err := cp(
-			dstbase,
+			filepath.Join(dstbase, pkgpath),
 			filepath.Join(cwd, "lib", "time", "zoneinfo.zip"),
 		)
 		if err != nil {
@@ -572,7 +568,7 @@ func subdir() (pkgpath string, underGoRoot bool, err error) {
 	)
 }
 
-func infoPlist() string {
+func infoPlist(pkgpath string) string {
 	return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -585,6 +581,7 @@ func infoPlist() string {
 <key>CFBundleResourceSpecification</key><string>ResourceRules.plist</string>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>CFBundleDisplayName</key><string>gotest</string>
+<key>GoExecWrapperWorkingDirectory</key><string>` + pkgpath + `</string>
 </dict>
 </plist>
 `

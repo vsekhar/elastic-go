@@ -147,7 +147,6 @@ func duff(size int64) (int64, int64) {
 }
 
 func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
-	s.SetPos(v.Pos)
 	switch v.Op {
 	case ssa.OpAMD64ADDQ, ssa.OpAMD64ADDL:
 		r := v.Reg()
@@ -281,8 +280,7 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		j1.To.Val = n1
 		j2.To.Val = s.Pc()
 
-	case ssa.OpAMD64HMULQ, ssa.OpAMD64HMULL, ssa.OpAMD64HMULW, ssa.OpAMD64HMULB,
-		ssa.OpAMD64HMULQU, ssa.OpAMD64HMULLU, ssa.OpAMD64HMULWU, ssa.OpAMD64HMULBU:
+	case ssa.OpAMD64HMULQ, ssa.OpAMD64HMULL, ssa.OpAMD64HMULQU, ssa.OpAMD64HMULLU:
 		// the frontend rewrites constant division by 8/16/32 bit integers into
 		// HMUL by a constant
 		// SSA rewrites generate the 64 bit versions
@@ -471,7 +469,8 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
 	case ssa.OpAMD64CMPQ, ssa.OpAMD64CMPL, ssa.OpAMD64CMPW, ssa.OpAMD64CMPB,
-		ssa.OpAMD64TESTQ, ssa.OpAMD64TESTL, ssa.OpAMD64TESTW, ssa.OpAMD64TESTB:
+		ssa.OpAMD64TESTQ, ssa.OpAMD64TESTL, ssa.OpAMD64TESTW, ssa.OpAMD64TESTB,
+		ssa.OpAMD64BTL, ssa.OpAMD64BTQ:
 		opregreg(v.Op.Asm(), v.Args[1].Reg(), v.Args[0].Reg())
 	case ssa.OpAMD64UCOMISS, ssa.OpAMD64UCOMISD:
 		// Go assembler has swapped operands for UCOMISx relative to CMP,
@@ -483,7 +482,8 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Reg = v.Args[0].Reg()
 		p.To.Type = obj.TYPE_CONST
 		p.To.Offset = v.AuxInt
-	case ssa.OpAMD64TESTQconst, ssa.OpAMD64TESTLconst, ssa.OpAMD64TESTWconst, ssa.OpAMD64TESTBconst:
+	case ssa.OpAMD64TESTQconst, ssa.OpAMD64TESTLconst, ssa.OpAMD64TESTWconst, ssa.OpAMD64TESTBconst,
+		ssa.OpAMD64BTLconst, ssa.OpAMD64BTQconst:
 		p := gc.Prog(v.Op.Asm())
 		p.From.Type = obj.TYPE_CONST
 		p.From.Offset = v.AuxInt
@@ -713,12 +713,6 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Type = obj.TYPE_REG
 		p.From.Reg = v.Args[0].Reg()
 		gc.AddrAuto(&p.To, v)
-	case ssa.OpPhi:
-		gc.CheckLoweredPhi(v)
-	case ssa.OpInitMem:
-		// memory arg needs no code
-	case ssa.OpArg:
-		// input args need no code
 	case ssa.OpAMD64LoweredGetClosurePtr:
 		// Closure pointer is DX.
 		gc.CheckLoweredGetClosurePtr(v)
@@ -820,10 +814,6 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Reg = v.Args[0].Reg()
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
-	case ssa.OpSP, ssa.OpSB:
-		// nothing to do
-	case ssa.OpSelect0, ssa.OpSelect1:
-		// nothing to do
 	case ssa.OpAMD64SETEQ, ssa.OpAMD64SETNE,
 		ssa.OpAMD64SETL, ssa.OpAMD64SETLE,
 		ssa.OpAMD64SETG, ssa.OpAMD64SETGE,
@@ -867,14 +857,6 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 	case ssa.OpAMD64REPMOVSQ:
 		gc.Prog(x86.AREP)
 		gc.Prog(x86.AMOVSQ)
-	case ssa.OpVarDef:
-		gc.Gvardef(v.Aux.(*gc.Node))
-	case ssa.OpVarKill:
-		gc.Gvarkill(v.Aux.(*gc.Node))
-	case ssa.OpVarLive:
-		gc.Gvarlive(v.Aux.(*gc.Node))
-	case ssa.OpKeepAlive:
-		gc.KeepAlive(v)
 	case ssa.OpAMD64LoweredNilCheck:
 		// Issue a load which will fault if the input is nil.
 		// TODO: We currently use the 2-byte instruction TESTB AX, (reg).

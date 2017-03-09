@@ -5,7 +5,6 @@
 package gc
 
 import (
-	"cmd/internal/obj"
 	"cmd/internal/src"
 	"fmt"
 	"sort"
@@ -292,8 +291,7 @@ func newname(s *Sym) *Node {
 	}
 	n := nod(ONAME, nil, nil)
 	n.Sym = s
-	n.Addable = true
-	n.Ullman = 1
+	n.SetAddable(true)
 	n.Xoffset = 0
 	return n
 }
@@ -305,8 +303,7 @@ func newnoname(s *Sym) *Node {
 	}
 	n := nod(ONONAME, nil, nil)
 	n.Sym = s
-	n.Addable = true
-	n.Ullman = 1
+	n.SetAddable(true)
 	n.Xoffset = 0
 	return n
 }
@@ -316,7 +313,7 @@ func newnoname(s *Sym) *Node {
 func newfuncname(s *Sym) *Node {
 	n := newname(s)
 	n.Func = new(Func)
-	n.Func.IsHiddenClosure = Curfn != nil
+	n.Func.SetIsHiddenClosure(Curfn != nil)
 	return n
 }
 
@@ -373,11 +370,10 @@ func oldname(s *Sym) *Node {
 			c = nod(ONAME, nil, nil)
 			c.Sym = s
 			c.Class = PAUTOHEAP
-			c.setIsClosureVar(true)
-			c.Isddd = n.Isddd
+			c.SetIsClosureVar(true)
+			c.SetIsddd(n.Isddd())
 			c.Name.Defn = n
-			c.Addable = false
-			c.Ullman = 2
+			c.SetAddable(false)
 			c.Name.Funcdepth = funcdepth
 
 			// Link into list of active closure variables.
@@ -413,7 +409,7 @@ func colasname(n *Node) bool {
 func colasdefn(left []*Node, defn *Node) {
 	for _, n := range left {
 		if n.Sym != nil {
-			n.Sym.Flags |= SymUniq
+			n.Sym.SetUniq(true)
 		}
 	}
 
@@ -428,14 +424,14 @@ func colasdefn(left []*Node, defn *Node) {
 			continue
 		}
 
-		if n.Sym.Flags&SymUniq == 0 {
+		if !n.Sym.Uniq() {
 			yyerrorl(defn.Pos, "%v repeated on left side of :=", n.Sym)
-			n.Diag = true
+			n.SetDiag(true)
 			nerr++
 			continue
 		}
 
-		n.Sym.Flags &^= SymUniq
+		n.Sym.SetUniq(false)
 		if n.Sym.Block == block {
 			continue
 		}
@@ -667,7 +663,7 @@ func structfield(n *Node) *Field {
 	}
 
 	f := newField()
-	f.Isddd = n.Isddd
+	f.SetIsddd(n.Isddd())
 
 	if n.Right != nil {
 		n.Right = typecheck(n.Right, Etype)
@@ -684,7 +680,7 @@ func structfield(n *Node) *Field {
 
 	f.Type = n.Type
 	if f.Type == nil {
-		f.Broke = true
+		f.SetBroke(true)
 	}
 
 	switch u := n.Val().U.(type) {
@@ -745,8 +741,8 @@ func tostruct0(t *Type, l []*Node) {
 	fields := make([]*Field, len(l))
 	for i, n := range l {
 		f := structfield(n)
-		if f.Broke {
-			t.Broke = true
+		if f.Broke() {
+			t.SetBroke(true)
 		}
 		fields[i] = f
 	}
@@ -754,7 +750,7 @@ func tostruct0(t *Type, l []*Node) {
 
 	checkdupfields("field", t)
 
-	if !t.Broke {
+	if !t.Broke() {
 		checkwidth(t)
 	}
 }
@@ -772,8 +768,8 @@ func tofunargs(l []*Node, funarg Funarg) *Type {
 		if n.Left != nil && n.Left.Class == PPARAM {
 			n.Left.Name.Param.Field = f
 		}
-		if f.Broke {
-			t.Broke = true
+		if f.Broke() {
+			t.SetBroke(true)
 		}
 		fields[i] = f
 	}
@@ -810,7 +806,7 @@ func interfacefield(n *Node) *Field {
 	}
 
 	f := newField()
-	f.Isddd = n.Isddd
+	f.SetIsddd(n.Isddd())
 
 	if n.Right != nil {
 		if n.Left != nil {
@@ -842,11 +838,11 @@ func interfacefield(n *Node) *Field {
 
 				case TFORW:
 					yyerror("interface type loop involving %v", n.Type)
-					f.Broke = true
+					f.SetBroke(true)
 
 				default:
 					yyerror("interface contains embedded non-interface %v", n.Type)
-					f.Broke = true
+					f.SetBroke(true)
 				}
 			}
 		}
@@ -856,7 +852,7 @@ func interfacefield(n *Node) *Field {
 
 	f.Type = n.Type
 	if f.Type == nil {
-		f.Broke = true
+		f.SetBroke(true)
 	}
 
 	lineno = lno
@@ -883,7 +879,7 @@ func tointerface0(t *Type, l []*Node) *Type {
 			for _, t1 := range f.Type.Fields().Slice() {
 				f = newField()
 				f.Type = t1.Type
-				f.Broke = t1.Broke
+				f.SetBroke(t1.Broke())
 				f.Sym = t1.Sym
 				if f.Sym != nil {
 					f.Nname = newname(f.Sym)
@@ -893,8 +889,8 @@ func tointerface0(t *Type, l []*Node) *Type {
 		} else {
 			fields = append(fields, f)
 		}
-		if f.Broke {
-			t.Broke = true
+		if f.Broke() {
+			t.SetBroke(true)
 		}
 	}
 	sort.Sort(methcmp(fields))
@@ -981,8 +977,8 @@ func functype0(t *Type, this *Node, in, out []*Node) {
 
 	checkdupfields("argument", t.Recvs(), t.Results(), t.Params())
 
-	if t.Recvs().Broke || t.Results().Broke || t.Params().Broke {
-		t.Broke = true
+	if t.Recvs().Broke() || t.Results().Broke() || t.Params().Broke() {
+		t.SetBroke(true)
 	}
 
 	t.FuncType().Outnamed = false
@@ -1147,7 +1143,7 @@ func addmethod(msym *Sym, t *Type, local, nointerface bool) {
 		}
 
 		switch {
-		case t == nil || t.Broke:
+		case t == nil || t.Broke():
 			// rely on typecheck having complained before
 		case t.Sym == nil:
 			yyerror("invalid receiver type %v (%v is an unnamed type)", pa, t)
@@ -1163,7 +1159,7 @@ func addmethod(msym *Sym, t *Type, local, nointerface bool) {
 		return
 	}
 
-	if local && !mt.Local {
+	if local && !mt.Local() {
 		yyerror("cannot define new methods on non-local type %v", mt)
 		return
 	}
@@ -1197,7 +1193,7 @@ func addmethod(msym *Sym, t *Type, local, nointerface bool) {
 	f.Sym = msym
 	f.Nname = newname(msym)
 	f.Type = t
-	f.Nointerface = nointerface
+	f.SetNointerface(nointerface)
 
 	mt.Methods().Append(f)
 }
@@ -1228,11 +1224,6 @@ func funccompile(n *Node) {
 	pc = nil
 	funcdepth = 0
 	dclcontext = PEXTERN
-	if nerrors != 0 {
-		// If we have compile errors, ignore any assembler/linker errors.
-		Ctxt.DiagFunc = func(string, ...interface{}) {}
-	}
-	obj.Flushplist(Ctxt) // convert from Prog list to machine code
 }
 
 func funcsym(s *Sym) *Sym {

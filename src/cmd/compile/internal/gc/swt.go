@@ -158,10 +158,10 @@ func typecheckswitch(n *Node) {
 						n1 = n.Left.Right
 						ls[i1] = n1
 					case !n1.Type.IsInterface() && t.IsInterface() && !implements(n1.Type, t, &missing, &have, &ptr):
-						if have != nil && !missing.Broke && !have.Broke {
+						if have != nil && !missing.Broke() && !have.Broke() {
 							yyerror("impossible type switch case: %L cannot have dynamic type %v"+
 								" (wrong type for %v method)\n\thave %v%S\n\twant %v%S", n.Left.Right, n1.Type, missing.Sym, have.Sym, have.Type, missing.Sym, missing.Type)
-						} else if !missing.Broke {
+						} else if !missing.Broke() {
 							if ptr != 0 {
 								yyerror("impossible type switch case: %L cannot have dynamic type %v"+
 									" (%v method has pointer receiver)", n.Left.Right, n1.Type, missing.Sym)
@@ -188,7 +188,7 @@ func typecheckswitch(n *Node) {
 				}
 
 				nvar = typecheck(nvar, Erv|Easgn)
-				ncase.Rlist.SetIndex(0, nvar)
+				ncase.Rlist.SetFirst(nvar)
 			}
 		}
 
@@ -628,8 +628,8 @@ func (s *exprSwitch) checkDupCases(cc []caseClause) {
 
 			case c.node.List.Len() == 2:
 				// Range of integers.
-				low := c.node.List.Index(0).Int64()
-				high := c.node.List.Index(1).Int64()
+				low := c.node.List.First().Int64()
+				high := c.node.List.Second().Int64()
 				for i := low; i <= high; i++ {
 					prev, dup := seen[i]
 					if !dup {
@@ -745,7 +745,7 @@ func (s *typeSwitch) walk(sw *Node) {
 		i.Nbody.Set1(nod(OGOTO, lbl, nil))
 		// Wrap default case with label.
 		blk := nod(OBLOCK, nil, nil)
-		blk.List.Set([]*Node{nod(OLABEL, lbl, nil), def})
+		blk.List.Set2(nod(OLABEL, lbl, nil), def)
 		def = blk
 	}
 	i.Left = typecheck(i.Left, Erv)
@@ -760,7 +760,7 @@ func (s *typeSwitch) walk(sw *Node) {
 	} else {
 		h.Xoffset = int64(3 * Widthptr) // offset of hash in runtime.itab
 	}
-	h.Bounded = true // guaranteed not to fault
+	h.SetBounded(true) // guaranteed not to fault
 	a = nod(OAS, s.hashname, h)
 	a = typecheck(a, Etop)
 	cas = append(cas, a)
@@ -840,7 +840,7 @@ func (s *typeSwitch) typeone(t *Node) *Node {
 	}
 
 	a := nod(OAS2, nil, nil)
-	a.List.Set([]*Node{name, s.okname}) // name, ok =
+	a.List.Set2(name, s.okname) // name, ok =
 	b := nod(ODOTTYPE, s.facename, nil)
 	b.Type = t.Left.Type // interface.(type)
 	a.Rlist.Set1(b)

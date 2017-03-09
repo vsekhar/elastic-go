@@ -35,12 +35,18 @@ const encodeStd = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345678
 const encodeURL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 // NewEncoding returns a new padded Encoding defined by the given alphabet,
-// which must be a 64-byte string.
+// which must be a 64-byte string that does not contain the padding character
+// or CR / LF ('\r', '\n').
 // The resulting Encoding uses the default padding character ('='),
 // which may be changed or disabled via WithPadding.
 func NewEncoding(encoder string) *Encoding {
 	if len(encoder) != 64 {
 		panic("encoding alphabet is not 64-bytes long")
+	}
+	for i := 0; i < len(encoder); i++ {
+		if encoder[i] == '\n' || encoder[i] == '\r' {
+			panic("encoding alphabet contains newline character")
+		}
 	}
 
 	e := new(Encoding)
@@ -58,7 +64,20 @@ func NewEncoding(encoder string) *Encoding {
 
 // WithPadding creates a new encoding identical to enc except
 // with a specified padding character, or NoPadding to disable padding.
+// The padding character must not be '\r' or '\n', must not
+// be contained in the encoding's alphabet and must be a rune equal or
+// below '\xff'.
 func (enc Encoding) WithPadding(padding rune) *Encoding {
+	if padding == '\r' || padding == '\n' || padding > 0xff {
+		panic("invalid padding")
+	}
+
+	for i := 0; i < len(enc.encode); i++ {
+		if rune(enc.encode[i]) == padding {
+			panic("padding contained in alphabet")
+		}
+	}
+
 	enc.padChar = padding
 	return &enc
 }
@@ -254,6 +273,7 @@ func (e CorruptInputError) Error() string {
 // indicates if end-of-message padding or a partial quantum was encountered
 // and thus any additional data is an error.
 func (enc *Encoding) decode(dst, src []byte) (n int, end bool, err error) {
+	var inIdx int
 	si := 0
 
 	// skip over newlines
@@ -275,6 +295,7 @@ func (enc *Encoding) decode(dst, src []byte) (n int, end bool, err error) {
 				break
 			}
 			in := src[si]
+			inIdx = si
 
 			si++
 			// skip over newlines
@@ -287,7 +308,7 @@ func (enc *Encoding) decode(dst, src []byte) (n int, end bool, err error) {
 				switch j {
 				case 0, 1:
 					// incorrect padding
-					return n, false, CorruptInputError(si - 1)
+					return n, false, CorruptInputError(inIdx)
 				case 2:
 					// "==" is expected, the first "=" is already consumed.
 					if si == len(src) {
@@ -314,7 +335,7 @@ func (enc *Encoding) decode(dst, src []byte) (n int, end bool, err error) {
 			}
 			dbuf[j] = enc.decodeMap[in]
 			if dbuf[j] == 0xFF {
-				return n, false, CorruptInputError(si - 1)
+				return n, false, CorruptInputError(inIdx)
 			}
 		}
 

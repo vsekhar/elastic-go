@@ -44,10 +44,6 @@
 (Hmul64u x y) -> (MULHDU x y)
 (Hmul32  x y) -> (SRDconst [32] (MULLD (MOVWreg x) (MOVWreg y)))
 (Hmul32u x y) -> (SRDconst [32] (MULLD (MOVWZreg x) (MOVWZreg y)))
-(Hmul16  x y) -> (SRDconst [16] (MULLW (MOVHreg x) (MOVHreg y)))
-(Hmul16u x y) -> (SRDconst [16] (MULLW (MOVHZreg x) (MOVHZreg y)))
-(Hmul8   x y) -> (SRDconst [8] (MULLW (MOVBreg x) (MOVBreg y)))
-(Hmul8u  x y) -> (SRDconst [8] (MULLW (MOVBZreg x) (MOVBZreg y)))
 
 (Mod64  x y) -> (MODD  x y)
 (Mod64u x y) -> (MODDU x y)
@@ -177,6 +173,9 @@
 
 (Cvt32Fto64F x) -> (LDEBR x)
 (Cvt64Fto32F x) -> (LEDBR x)
+
+(Round32F x) -> (LoweredRound32F x)
+(Round64F x) -> (LoweredRound64F x)
 
 // Lowering shifts
 // Unsigned shifts need to return 0 if shift amount is >= width of shifted value.
@@ -438,7 +437,7 @@
 (If (MOVDGTnoinv (MOVDconst [0]) (MOVDconst [1]) cmp) yes no) -> (GTF cmp yes no)
 (If (MOVDGEnoinv (MOVDconst [0]) (MOVDconst [1]) cmp) yes no) -> (GEF cmp yes no)
 
-(If cond yes no) -> (NE (CMPWconst [0] (MOVBZreg cond)) yes no)
+(If cond yes no) -> (NE (CMPWconst [0] (MOVBZreg <config.fe.TypeBool()> cond)) yes no)
 
 // ***************************
 // Above: lowering rules
@@ -703,9 +702,9 @@
 (MOVWZreg x:(MOVWZloadidx [off] {sym} ptr idx mem)) && x.Uses == 1 && clobber(x) -> @x.Block (MOVWZloadidx <v.Type> [off] {sym} ptr idx mem)
 
 // replace load from same location as preceding store with copy
-(MOVBZload [off] {sym} ptr (MOVBstore [off2] {sym2} ptr2 x _)) && sym == sym2 && off == off2 && isSamePtr(ptr, ptr2) -> (MOVDreg x)
-(MOVHZload [off] {sym} ptr (MOVHstore [off2] {sym2} ptr2 x _)) && sym == sym2 && off == off2 && isSamePtr(ptr, ptr2) -> (MOVDreg x)
-(MOVWZload [off] {sym} ptr (MOVWstore [off2] {sym2} ptr2 x _)) && sym == sym2 && off == off2 && isSamePtr(ptr, ptr2) -> (MOVDreg x)
+(MOVBZload [off] {sym} ptr (MOVBstore [off2] {sym2} ptr2 x _)) && sym == sym2 && off == off2 && isSamePtr(ptr, ptr2) -> (MOVBZreg x)
+(MOVHZload [off] {sym} ptr (MOVHstore [off2] {sym2} ptr2 x _)) && sym == sym2 && off == off2 && isSamePtr(ptr, ptr2) -> (MOVHZreg x)
+(MOVWZload [off] {sym} ptr (MOVWstore [off2] {sym2} ptr2 x _)) && sym == sym2 && off == off2 && isSamePtr(ptr, ptr2) -> (MOVWZreg x)
 (MOVDload [off] {sym} ptr (MOVDstore [off2] {sym2} ptr2 x _)) && sym == sym2 && off == off2 && isSamePtr(ptr, ptr2) -> (MOVDreg x)
 
 // Don't extend before storing
@@ -1010,6 +1009,8 @@
 (XOR (MOVDconst [c]) (MOVDconst [d])) -> (MOVDconst [c^d])
 (XORconst [c] (MOVDconst [d])) -> (MOVDconst [c^d])
 (XORWconst [c] (MOVDconst [d])) -> (MOVDconst [c^d])
+(LoweredRound32F x:(FMOVSconst)) -> x
+(LoweredRound64F x:(FMOVDconst)) -> x
 
 // generic simplifications
 // TODO: more of this
@@ -1023,6 +1024,14 @@
 (ORW x x) -> x
 (XOR x x) -> (MOVDconst [0])
 (XORW x x) -> (MOVDconst [0])
+
+// fused multiply-add
+(FADD x (FMUL y z)) -> (FMADD x y z)
+(FADDS x (FMULS y z)) -> (FMADDS x y z)
+(FADD (FMUL y z) x) -> (FMADD x y z)
+(FADDS (FMULS y z) x) -> (FMADDS x y z)
+(FSUB (FMUL y z) x) -> (FMSUB x y z)
+(FSUBS (FMULS y z) x) -> (FMSUBS x y z)
 
 // Fold memory operations into operations.
 // Exclude global data (SB) because these instructions cannot handle relative addresses.

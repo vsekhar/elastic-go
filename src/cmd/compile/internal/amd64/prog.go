@@ -27,7 +27,6 @@ var progtable = [x86.ALAST & obj.AMask]gc.ProgInfo{
 	obj.AFUNCDATA: {Flags: gc.Pseudo},
 	obj.APCDATA:   {Flags: gc.Pseudo},
 	obj.AUNDEF:    {Flags: gc.Break},
-	obj.AUSEFIELD: {Flags: gc.OK},
 	obj.AVARDEF:   {Flags: gc.Pseudo | gc.RightWrite},
 	obj.AVARKILL:  {Flags: gc.Pseudo | gc.RightWrite},
 	obj.AVARLIVE:  {Flags: gc.Pseudo | gc.LeftRead},
@@ -72,6 +71,8 @@ var progtable = [x86.ALAST & obj.AMask]gc.ProgInfo{
 	x86.ACMOVWEQ & obj.AMask: {Flags: gc.SizeW | gc.LeftRead | RightRdwr | gc.UseCarry},
 	x86.ACMOVWNE & obj.AMask: {Flags: gc.SizeW | gc.LeftRead | RightRdwr | gc.UseCarry},
 
+	x86.ABTL & obj.AMask:       {Flags: gc.SizeL | gc.LeftRead | gc.RightRead | gc.SetCarry},
+	x86.ABTQ & obj.AMask:       {Flags: gc.SizeQ | gc.LeftRead | gc.RightRead | gc.SetCarry},
 	x86.ACMPB & obj.AMask:      {Flags: gc.SizeB | gc.LeftRead | gc.RightRead | gc.SetCarry},
 	x86.ACMPL & obj.AMask:      {Flags: gc.SizeL | gc.LeftRead | gc.RightRead | gc.SetCarry},
 	x86.ACMPQ & obj.AMask:      {Flags: gc.SizeQ | gc.LeftRead | gc.RightRead | gc.SetCarry},

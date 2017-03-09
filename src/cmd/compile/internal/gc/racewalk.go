@@ -232,7 +232,6 @@ func instrumentnode(np **Node, init *Nodes, wr int, skip int) {
 		OXOR,
 		OSUB,
 		OMUL,
-		OHMUL,
 		OEQ,
 		ONE,
 		OLT,
@@ -373,7 +372,7 @@ func instrumentnode(np **Node, init *Nodes, wr int, skip int) {
 		yyerror("instrument: OGETG can happen only in runtime which we don't instrument")
 		goto ret
 
-	case OFOR:
+	case OFOR, OFORUNTIL:
 		if n.Left != nil {
 			instrumentnode(&n.Left, &n.Left.Ninit, 0, 0)
 		}
@@ -564,7 +563,7 @@ func makeaddable(n *Node) {
 
 func uintptraddr(n *Node) *Node {
 	r := nod(OADDR, n, nil)
-	r.Bounded = true
+	r.SetBounded(true)
 	r = conv(r, Types[TUNSAFEPTR])
 	r = conv(r, Types[TUINTPTR])
 	return r
@@ -631,5 +630,5 @@ func appendinit(np **Node, init Nodes) {
 	}
 
 	n.Ninit.AppendNodes(&init)
-	n.Ullman = UINF
+	n.SetHasCall(true)
 }

@@ -292,16 +292,6 @@ type sudog struct {
 	c           *hchan // channel
 }
 
-type gcstats struct {
-	// the struct must consist of only uint64's,
-	// because it is casted to uint64[].
-	nhandoff    uint64
-	nhandoffcnt uint64
-	nprocyield  uint64
-	nosyield    uint64
-	nsleep      uint64
-}
-
 type libcall struct {
 	fn   uintptr
 	n    uintptr // number of parameters
@@ -373,10 +363,10 @@ type g struct {
 	gopc           uintptr // pc of go statement that created this goroutine
 	startpc        uintptr // pc of goroutine function
 	racectx        uintptr
-	waiting        *sudog    // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
-	cgoCtxt        []uintptr // cgo traceback context
-
-	labels unsafe.Pointer // profiler labels
+	waiting        *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
+	cgoCtxt        []uintptr      // cgo traceback context
+	labels         unsafe.Pointer // profiler labels
+	timer          *timer         // cached timer for time.Sleep
 
 	// Per-G GC state
 
@@ -436,7 +426,6 @@ type m struct {
 	fflag         uint32      // floating point compare flags
 	locked        uint32      // tracking for lockosthread
 	nextwaitm     uintptr     // next m waiting for lock
-	gcstats       gcstats
 	needextram    bool
 	traceback     uint8
 	waitunlockf   unsafe.Pointer // todo go func(*g, unsafe.pointer) bool
@@ -696,7 +685,7 @@ type _panic struct {
 
 // stack traces
 type stkframe struct {
-	fn       *_func     // function being run
+	fn       funcInfo   // function being run
 	pc       uintptr    // program counter within fn
 	continpc uintptr    // program counter where execution can continue, or 0 if not
 	lr       uintptr    // program counter at caller aka link register

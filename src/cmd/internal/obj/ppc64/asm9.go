@@ -539,7 +539,6 @@ var optab = []Optab{
 	{ALSW, C_ZOREG, C_NONE, C_NONE, C_REG, 45, 4, 0},
 	{ALSW, C_ZOREG, C_NONE, C_LCON, C_REG, 42, 4, 0},
 	{obj.AUNDEF, C_NONE, C_NONE, C_NONE, C_NONE, 78, 4, 0},
-	{obj.AUSEFIELD, C_ADDR, C_NONE, C_NONE, C_NONE, 0, 0, 0},
 	{obj.APCDATA, C_LCON, C_NONE, C_NONE, C_LCON, 0, 0, 0},
 	{obj.AFUNCDATA, C_SCON, C_NONE, C_NONE, C_ADDR, 0, 0, 0},
 	{obj.ANOP, C_NONE, C_NONE, C_NONE, C_NONE, 0, 0, 0},
@@ -576,7 +575,7 @@ func span9(ctxt *obj.Link, cursym *obj.LSym) {
 		o = oplook(ctxt, p)
 		m = int(o.size)
 		if m == 0 {
-			if p.As != obj.ANOP && p.As != obj.AFUNCDATA && p.As != obj.APCDATA && p.As != obj.AUSEFIELD {
+			if p.As != obj.ANOP && p.As != obj.AFUNCDATA && p.As != obj.APCDATA {
 				ctxt.Diag("zero-width instruction\n%v", p)
 			}
 			continue
@@ -633,7 +632,7 @@ func span9(ctxt *obj.Link, cursym *obj.LSym) {
 
 			m = int(o.size)
 			if m == 0 {
-				if p.As != obj.ANOP && p.As != obj.AFUNCDATA && p.As != obj.APCDATA && p.As != obj.AUSEFIELD {
+				if p.As != obj.ANOP && p.As != obj.AFUNCDATA && p.As != obj.APCDATA {
 					ctxt.Diag("zero-width instruction\n%v", p)
 				}
 				continue
@@ -1768,7 +1767,6 @@ func buildop(ctxt *obj.Link) {
 			obj.ANOP,
 			obj.ATEXT,
 			obj.AUNDEF,
-			obj.AUSEFIELD,
 			obj.AFUNCDATA,
 			obj.APCDATA,
 			obj.ADUFFZERO,
@@ -2721,6 +2719,9 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 		case ARLDIMI, ARLDIMICC:
 			o1 = AOP_RRR(opirr(ctxt, p.As), uint32(p.Reg), uint32(p.To.Reg), (uint32(v) & 0x1F))
 			o1 |= (uint32(d) & 31) << 6
+			if d&0x20 != 0 {
+				o1 |= 1 << 5
+			}
 			if v&0x20 != 0 {
 				o1 |= 1 << 1
 			}

@@ -17,7 +17,7 @@ package ld
 //
 // The file format is:
 //
-//	- magic header: "\x00\x00go17ld"
+//	- magic header: "\x00\x00go19ld"
 //	- byte 1 - version number
 //	- sequence of strings giving dependencies (imported packages)
 //	- empty string (marks end of sequence)
@@ -33,7 +33,7 @@ package ld
 //	- data, the content of the defined symbols
 //	- sequence of defined symbols
 //	- byte 0xff (marks end of sequence)
-//	- magic footer: "\xff\xffgo17ld"
+//	- magic footer: "\xff\xffgo19ld"
 //
 // All integers are stored in a zigzag varint format.
 // See golang.org/s/go12symtab for a definition.
@@ -96,6 +96,7 @@ package ld
 //	- pcsp [data block]
 //	- pcfile [data block]
 //	- pcline [data block]
+//	- pcinline [data block]
 //	- npcdata [int]
 //	- pcdata [npcdata data blocks]
 //	- nfuncdata [int]
@@ -103,6 +104,8 @@ package ld
 //	- funcdatasym [nfuncdata ints]
 //	- nfile [int]
 //	- file [nfile symref index]
+//	- ninlinedcall [int]
+//	- inlinedcall [ninlinedcall int symref int symref]
 //
 // The file layout and meaning of type integers are architecture-independent.
 //
@@ -124,8 +127,8 @@ import (
 )
 
 const (
-	startmagic = "\x00\x00go17ld"
-	endmagic   = "\xff\xffgo17ld"
+	startmagic = "\x00\x00go19ld"
+	endmagic   = "\xff\xffgo19ld"
 )
 
 var emptyPkg = []byte(`"".`)
@@ -374,6 +377,7 @@ overwrite:
 		pc.Pcsp.P = r.readData()
 		pc.Pcfile.P = r.readData()
 		pc.Pcline.P = r.readData()
+		pc.Pcinline.P = r.readData()
 		n = r.readInt()
 		pc.Pcdata = r.pcdata[:n:n]
 		if !isdup {
@@ -402,6 +406,14 @@ overwrite:
 		}
 		for i := 0; i < n; i++ {
 			pc.File[i] = r.readSymIndex()
+		}
+		n = r.readInt()
+		pc.InlTree = make([]InlinedCall, n)
+		for i := 0; i < n; i++ {
+			pc.InlTree[i].Parent = r.readInt32()
+			pc.InlTree[i].File = r.readSymIndex()
+			pc.InlTree[i].Line = r.readInt32()
+			pc.InlTree[i].Func = r.readSymIndex()
 		}
 
 		if !dupok {

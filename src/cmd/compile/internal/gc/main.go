@@ -37,15 +37,17 @@ var (
 	Debug_panic    int
 	Debug_slice    int
 	Debug_wb       int
+	Debug_pctab    string
 )
 
 // Debug arguments.
 // These can be specified with the -d flag, as in "-d nil"
-// to set the debug_checknil variable. In general the list passed
-// to -d can be comma-separated.
+// to set the debug_checknil variable.
+// Multiple options can be comma-separated.
+// Each option accepts an optional argument, as in "gcprog=2"
 var debugtab = []struct {
 	name string
-	val  *int
+	val  interface{} // must be *int or *string
 }{
 	{"append", &Debug_append},         // print information about append compilation
 	{"closure", &Debug_closure},       // print information about closure compilation
@@ -58,6 +60,7 @@ var debugtab = []struct {
 	{"typeassert", &Debug_typeassert}, // print information about type assertion inlining
 	{"wb", &Debug_wb},                 // print information about write barriers
 	{"export", &Debug_export},         // print export data
+	{"pctab", &Debug_pctab},           // print named pc-value table
 }
 
 func usage() {
@@ -110,6 +113,7 @@ func Main() {
 	defer hidePanic()
 
 	Ctxt = obj.Linknew(Thearch.LinkArch)
+	Ctxt.DebugInfo = debuginfo
 	Ctxt.DiagFunc = yyerror
 	Ctxt.Bso = bufio.NewWriter(os.Stdout)
 
@@ -124,9 +128,14 @@ func Main() {
 	unsafepkg = mkpkg("unsafe")
 	unsafepkg.Name = "unsafe"
 
-	// real package, referred to by generated runtime calls
-	Runtimepkg = mkpkg("runtime")
+	// Pseudo-package that contains the compiler's builtin
+	// declarations for package runtime. These are declared in a
+	// separate package to avoid conflicts with package runtime's
+	// actual declarations, which may differ intentionally but
+	// insignificantly.
+	Runtimepkg = mkpkg("go.runtime")
 	Runtimepkg.Name = "runtime"
+	Runtimepkg.Prefix = "runtime"
 
 	// pseudo-packages used in symbol tables
 	itabpkg = mkpkg("go.itab")
@@ -181,6 +190,7 @@ func Main() {
 	obj.Flagcount("live", "debug liveness analysis", &debuglive)
 	obj.Flagcount("m", "print optimization decisions", &Debug['m'])
 	flag.BoolVar(&flag_msan, "msan", false, "build code compatible with C/C++ memory sanitizer")
+	flag.BoolVar(&dolinkobj, "dolinkobj", true, "generate linker-specific objects; if false, some invalid code may compile")
 	flag.BoolVar(&nolocalimports, "nolocalimports", false, "reject local (relative) imports")
 	flag.StringVar(&outfile, "o", "", "write output to `file`")
 	flag.StringVar(&myimportpath, "p", "", "set expected package import `path`")
@@ -273,26 +283,33 @@ func Main() {
 			if name == "" {
 				continue
 			}
-			val := 1
-			valstring := ""
-			if i := strings.Index(name, "="); i >= 0 {
+			val, valstring, haveInt := 1, "", true
+			if i := strings.IndexAny(name, "=:"); i >= 0 {
 				var err error
-				val, err = strconv.Atoi(name[i+1:])
+				name, valstring = name[:i], name[i+1:]
+				val, err = strconv.Atoi(valstring)
 				if err != nil {
-					log.Fatalf("invalid debug value %v", name)
+					val, haveInt = 1, false
 				}
-				name = name[:i]
-			} else if i := strings.Index(name, ":"); i >= 0 {
-				valstring = name[i+1:]
-				name = name[:i]
 			}
 			for _, t := range debugtab {
-				if t.name == name {
-					if t.val != nil {
-						*t.val = val
-						continue Split
-					}
+				if t.name != name {
+					continue
 				}
+				switch vp := t.val.(type) {
+				case nil:
+					// Ignore
+				case *string:
+					*vp = valstring
+				case *int:
+					if !haveInt {
+						log.Fatalf("invalid debug value %v", name)
+					}
+					*vp = val
+				default:
+					panic("bad debugtab type")
+				}
+				continue Split
 			}
 			// special case for ssa for now
 			if strings.HasPrefix(name, "ssa/") {
@@ -314,6 +331,9 @@ func Main() {
 			log.Fatalf("unknown debug key -d %s\n", name)
 		}
 	}
+
+	// set via a -d flag
+	Ctxt.Debugpcln = Debug_pctab
 
 	// enable inlining.  for now:
 	//	default: inlining on.  (debug['l'] == 1)
@@ -466,38 +486,40 @@ func Main() {
 		escapesRemote(xtop)
 	}
 
-	// Phase 7: Transform closure bodies to properly reference captured variables.
-	// This needs to happen before walk, because closures must be transformed
-	// before walk reaches a call of a closure.
-	timings.Start("fe", "xclosures")
-	for _, n := range xtop {
-		if n.Op == ODCLFUNC && n.Func.Closure != nil {
-			Curfn = n
-			transformclosure(n)
+	if dolinkobj {
+		// Phase 7: Transform closure bodies to properly reference captured variables.
+		// This needs to happen before walk, because closures must be transformed
+		// before walk reaches a call of a closure.
+		timings.Start("fe", "xclosures")
+		for _, n := range xtop {
+			if n.Op == ODCLFUNC && n.Func.Closure != nil {
+				Curfn = n
+				transformclosure(n)
+			}
 		}
-	}
 
-	Curfn = nil
+		Curfn = nil
 
-	// Phase 8: Compile top level functions.
-	// Don't use range--walk can add functions to xtop.
-	timings.Start("be", "compilefuncs")
-	fcount = 0
-	for i := 0; i < len(xtop); i++ {
-		n := xtop[i]
-		if n.Op == ODCLFUNC {
-			funccompile(n)
-			fcount++
+		// Phase 8: Compile top level functions.
+		// Don't use range--walk can add functions to xtop.
+		timings.Start("be", "compilefuncs")
+		fcount = 0
+		for i := 0; i < len(xtop); i++ {
+			n := xtop[i]
+			if n.Op == ODCLFUNC {
+				funccompile(n)
+				fcount++
+			}
 		}
-	}
-	timings.AddEvent(fcount, "funcs")
+		timings.AddEvent(fcount, "funcs")
 
-	if nsavederrors+nerrors == 0 {
-		fninit(xtop)
-	}
+		if nsavederrors+nerrors == 0 {
+			fninit(xtop)
+		}
 
-	if compiling_runtime {
-		checknowritebarrierrec()
+		if compiling_runtime {
+			checknowritebarrierrec()
+		}
 	}
 
 	// Phase 9: Check external declarations.
@@ -946,7 +968,7 @@ func clearImports() {
 			// leave s->block set to cause redeclaration
 			// errors if a conflicting top-level name is
 			// introduced by a different file.
-			if !s.Def.Used && nsyntaxerrors == 0 {
+			if !s.Def.Used() && nsyntaxerrors == 0 {
 				pkgnotused(s.Def.Pos, s.Def.Name.Pkg.Path, s.Name)
 			}
 			s.Def = nil
@@ -956,9 +978,9 @@ func clearImports() {
 		if s.isAlias() {
 			// throw away top-level name left over
 			// from previous import . "x"
-			if s.Def.Name != nil && s.Def.Name.Pack != nil && !s.Def.Name.Pack.Used && nsyntaxerrors == 0 {
+			if s.Def.Name != nil && s.Def.Name.Pack != nil && !s.Def.Name.Pack.Used() && nsyntaxerrors == 0 {
 				pkgnotused(s.Def.Name.Pack.Pos, s.Def.Name.Pack.Name.Pkg.Path, "")
-				s.Def.Name.Pack.Used = true
+				s.Def.Name.Pack.SetUsed(true)
 			}
 
 			s.Def = nil

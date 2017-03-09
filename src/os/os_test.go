@@ -55,15 +55,12 @@ var sysdir = func() *sysDir {
 	case "darwin":
 		switch runtime.GOARCH {
 		case "arm", "arm64":
-			/// At this point the test harness has not had a chance
-			// to move us into the ./src/os directory, so the
-			// current working directory is the root of the app.
 			wd, err := syscall.Getwd()
 			if err != nil {
 				wd = err.Error()
 			}
 			return &sysDir{
-				wd,
+				filepath.Join(wd, "..", ".."),
 				[]string{
 					"ResourceRules.plist",
 					"Info.plist",
@@ -1057,14 +1054,22 @@ func testChtimes(t *testing.T, name string) {
 	}
 	postStat := st
 
-	/* Plan 9, NaCl:
-		Mtime is the time of the last change of content.  Similarly, atime is set whenever the
-	    contents are accessed; also, it is set whenever mtime is set.
-	*/
 	pat := Atime(postStat)
 	pmt := postStat.ModTime()
-	if !pat.Before(at) && runtime.GOOS != "plan9" && runtime.GOOS != "nacl" {
-		t.Errorf("AccessTime didn't go backwards; was=%d, after=%d", at, pat)
+	if !pat.Before(at) {
+		switch runtime.GOOS {
+		case "plan9", "nacl":
+			// Ignore.
+			// Plan 9, NaCl:
+			// Mtime is the time of the last change of
+			// content.  Similarly, atime is set whenever
+			// the contents are accessed; also, it is set
+			// whenever mtime is set.
+		case "netbsd":
+			t.Logf("AccessTime didn't go backwards; was=%d, after=%d (Ignoring. See NetBSD issue golang.org/issue/19293)", at, pat)
+		default:
+			t.Errorf("AccessTime didn't go backwards; was=%d, after=%d", at, pat)
+		}
 	}
 
 	if !pmt.Before(mt) {
