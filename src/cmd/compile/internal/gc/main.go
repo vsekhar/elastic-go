@@ -257,7 +257,13 @@ func Main() {
 		instrumenting = true
 	}
 	if flag_remote && !pure_go {
-		log.Fatal("-remote does not support cgo or partial compilation")
+		if !pure_go {
+			log.Fatal("-remote does not support cgo or partial compilation")
+		}
+
+		// real package, referred to by generated remote variable accesses
+		remotepkg = mkpkg("runtime/internal/remote")
+		remotepkg.Name = "remote"
 	}
 
 	// parse -d argument

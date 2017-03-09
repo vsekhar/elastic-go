@@ -159,6 +159,8 @@ var racepkg *Pkg // package runtime/race
 
 var msanpkg *Pkg // package runtime/msan
 
+var remotepkg *Pkg // package runtime/remote
+
 var typepkg *Pkg // fake package for runtime type info (headers)
 
 var unsafepkg *Pkg // package unsafe

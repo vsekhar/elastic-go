@@ -394,6 +394,10 @@ func (ctxt *Link) loadlib() {
 		s := ctxt.Syms.Lookup("runtime.isarchive", 0)
 		s.Attr |= AttrDuplicateOK
 		Adduint8(ctxt, s, 1)
+	case BuildmodeRemote:
+		s := ctxt.Syms.Lookup("runtime.isremote", 0)
+		s.Attr |= AttrDuplicateOK
+		Adduint8(ctxt, s, 1)
 	}
 
 	loadinternal(ctxt, "runtime")

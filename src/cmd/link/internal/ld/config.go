@@ -30,6 +30,7 @@ const (
 	BuildmodeCShared
 	BuildmodeShared
 	BuildmodePlugin
+	BuildmodeRemote
 )
 
 func (mode *BuildMode) Set(s string) error {
@@ -98,6 +99,18 @@ func (mode *BuildMode) Set(s string) error {
 			return badmode()
 		}
 		*mode = BuildmodePlugin
+	case "remote":
+		switch obj.GOOS {
+		case "linux":
+			switch obj.GOARCH {
+			case "amd64":
+			default:
+				return badmode()
+			}
+		default:
+			return badmode()
+		}
+		*mode = BuildmodeRemote
 	}
 	return nil
 }
@@ -118,6 +131,8 @@ func (mode *BuildMode) String() string {
 		return "shared"
 	case BuildmodePlugin:
 		return "plugin"
+	case BuildmodeRemote:
+		return "remote"
 	}
 	return fmt.Sprintf("BuildMode(%d)", uint8(*mode))
 }

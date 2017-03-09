@@ -748,4 +748,5 @@ var (
 var (
 	islibrary bool // -buildmode=c-shared
 	isarchive bool // -buildmode=c-archive
+	isremote  bool // -buildmode=remote
 )

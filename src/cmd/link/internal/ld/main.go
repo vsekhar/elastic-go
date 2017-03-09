@@ -133,6 +133,11 @@ func Main() {
 		usage()
 	}
 
+	// TODO(vsekhar): what about LinkAuto?
+	if Buildmode == BuildmodeRemote && Linkmode == LinkExternal {
+		Exitf("-buildmode=remote cannot be used with external linking")
+	}
+
 	if *flagOutfile == "" {
 		*flagOutfile = "a.out"
 		if Headtype == obj.Hwindows || Headtype == obj.Hwindowsgui {
