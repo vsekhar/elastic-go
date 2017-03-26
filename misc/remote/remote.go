@@ -3,26 +3,50 @@
 package main
 
 import (
-	"os"
+	"fmt"
 )
 
-var remoteVar = 42
-var localVar = 43
+var var1 int
+var var2 int
+var var3 int
+
+func init() {
+	var1 = 0
+}
 
 func main() {
-	if os.Getenv("GOREMOTE") == "" {
-		panic("no GOREMOTE specified")
+	var1 = 1
+	var2 = 1
+	g(0)
+	done := make(chan struct{})
+	go h(0, done)
+	<-done
+	fmt.Printf("var1: %d\n", var1)
+	fmt.Printf("var2: %d\n", var2)
+	fmt.Printf("var3: %d\n", var3)
+}
+
+func h(i int, done chan struct{}) {
+	var2 += 1
+	if i == 0 {
+		j()
+		done <- struct{}{}
 	}
+}
 
-	ch := make(chan struct{})
-	go func() {
-		remoteVar = remoteVar + 1
-		ch <- struct{}{}
-	}()
-	<-ch
-	localVar = remoteVar + 3
-	// remoteVar == 43, remote allocation
-	// localVar == 46, local allocation
+func j() {
+	var3 += 1
+	g(1)
+	k()
+}
 
-	// TODO: check allocation status
+func k() {
+	h(1, nil) // stop loop
+}
+
+func g(i int) {
+	var3 += 1
+	if i == 0 {
+		j()
+	}
 }

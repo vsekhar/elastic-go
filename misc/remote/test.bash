@@ -10,5 +10,5 @@ function cleanup() {
 }
 trap cleanup EXIT
 
-go build -buildmode=remote -o a.out remote.go
+go build -buildmode=remote -o a.out -gcflags="-d remote" remote.go remote2.go
 go remote ./a.out

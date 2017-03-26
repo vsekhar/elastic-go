@@ -157,7 +157,8 @@ func bootstrapBuildTools() {
 	// https://groups.google.com/d/msg/golang-dev/Ss7mCKsvk8w/Gsq7VYI0AwAJ
 	// Use the math_big_pure_go build tag to disable the assembly in math/big
 	// which may contain unsupported instructions.
-	run(workspace, ShowOutput|CheckExit, pathf("%s/bin/go", goroot_bootstrap), "install", "-gcflags=-l", "-tags=math_big_pure_go", "-v", "bootstrap/cmd/...")
+	// Use the cmd_go_bootstrap build tag to disable the remote build mode.
+	run(workspace, ShowOutput|CheckExit, pathf("%s/bin/go", goroot_bootstrap), "install", "-gcflags=-l", "-tags=math_big_pure_go", "-tags=cmd_go_bootstrap", "-v", "bootstrap/cmd/...")
 
 	// Copy binaries into tool binary directory.
 	for _, name := range bootstrapDirs {

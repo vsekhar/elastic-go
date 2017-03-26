@@ -38,6 +38,7 @@ var (
 	Debug_slice    int
 	Debug_wb       int
 	Debug_pctab    string
+	Debug_remote   int
 )
 
 // Debug arguments.
@@ -61,6 +62,7 @@ var debugtab = []struct {
 	{"wb", &Debug_wb},                 // print information about write barriers
 	{"export", &Debug_export},         // print export data
 	{"pctab", &Debug_pctab},           // print named pc-value table
+	{"remote", &Debug_remote},         // print remote allocation decisions
 }
 
 func usage() {
@@ -272,8 +274,11 @@ func Main() {
 		}
 
 		// real package, referred to by generated remote variable accesses
-		remotepkg = mkpkg("runtime/internal/remote")
+		remotepkg = mkpkg("internal/remote")
 		remotepkg.Name = "remote"
+	}
+	if flag_remote && !dolinkobj {
+		log.Fatal("-remote requires generating compiler and linker objects")
 	}
 
 	// parse -d argument
@@ -355,6 +360,11 @@ func Main() {
 
 	timings.Start("fe", "loadsys")
 	loadsys()
+
+	if flag_remote {
+		timings.Start("fe", "remote:analyze")
+		analyzeRemote(flag.Args())
+	}
 
 	timings.Start("fe", "parse")
 	lines := parseFiles(flag.Args())
@@ -479,12 +489,6 @@ func Main() {
 	// because large values may contain pointers, it must happen early.
 	timings.Start("fe", "escapes")
 	escapes(xtop)
-	if flag_remote {
-		// Phase 6a: Concurrency escape analysis.
-		// Required for moving heap allocations of variables that cross
-		// goroutines to remote allocations.
-		escapesRemote(xtop)
-	}
 
 	if dolinkobj {
 		// Phase 7: Transform closure bodies to properly reference captured variables.
@@ -499,6 +503,13 @@ func Main() {
 		}
 
 		Curfn = nil
+
+		if flag_remote {
+			// Phase 7a: Concurrency escape analysis.
+			// Required for moving heap allocations of variables that cross
+			// goroutines to remote allocations.
+			escapesRemote(xtop)
+		}
 
 		// Phase 8: Compile top level functions.
 		// Don't use range--walk can add functions to xtop.
