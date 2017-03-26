@@ -1583,7 +1583,10 @@ func TestGoListStdDoesNotIncludeCommands(t *testing.T) {
 	defer tg.cleanup()
 	tg.parallel()
 	tg.run("list", "std")
-	tg.grepStdoutNot("cmd/", "go list std shows commands")
+
+	// "cmd/" paths may appear in vendor repos which is ok, so check only
+	// for "cmd/" at the start of a line.
+	tg.grepStdoutNot("^cmd/", "go list std shows commands")
 }
 
 func TestGoListCmdOnlyShowsCommands(t *testing.T) {
