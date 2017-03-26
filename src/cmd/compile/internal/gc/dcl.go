@@ -7,7 +7,6 @@ package gc
 import (
 	"cmd/internal/src"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -106,7 +105,7 @@ func testdclstack() {
 			if nerrors != 0 {
 				errorexit()
 			}
-			yyerror("mark left on the stack")
+			Fatalf("mark left on the stack")
 		}
 	}
 }
@@ -166,7 +165,7 @@ func declare(n *Node, ctxt Class) {
 	s := n.Sym
 
 	// kludgy: typecheckok means we're past parsing. Eg genwrapper may declare out of package names later.
-	if importpkg == nil && !typecheckok && s.Pkg != localpkg {
+	if !inimport && !typecheckok && s.Pkg != localpkg {
 		yyerror("cannot declare name %v", s)
 	}
 
@@ -284,18 +283,6 @@ func variter(vl []*Node, t *Node, el []*Node) []*Node {
 	return init
 }
 
-// newname returns a new ONAME Node associated with symbol s.
-func newname(s *Sym) *Node {
-	if s == nil {
-		Fatalf("newname nil")
-	}
-	n := nod(ONAME, nil, nil)
-	n.Sym = s
-	n.SetAddable(true)
-	n.Xoffset = 0
-	return n
-}
-
 // newnoname returns a new ONONAME Node associated with symbol s.
 func newnoname(s *Sym) *Node {
 	if s == nil {
@@ -367,8 +354,7 @@ func oldname(s *Sym) *Node {
 		c := n.Name.Param.Innermost
 		if c == nil || c.Name.Funcdepth != funcdepth {
 			// Do not have a closure var for the active closure yet; make one.
-			c = nod(ONAME, nil, nil)
-			c.Sym = s
+			c = newname(s)
 			c.Class = PAUTOHEAP
 			c.SetIsClosureVar(true)
 			c.SetIsddd(n.Isddd())
@@ -381,7 +367,6 @@ func oldname(s *Sym) *Node {
 			c.Name.Param.Outer = n.Name.Param.Innermost
 			n.Name.Param.Innermost = c
 
-			c.Xoffset = 0
 			Curfn.Func.Cvars.Append(c)
 		}
 
@@ -687,9 +672,9 @@ func structfield(n *Node) *Field {
 	case string:
 		f.Note = u
 	default:
-		yyerror("field annotation must be string")
+		yyerror("field tag must be a string")
 	case nil:
-		// noop
+		// no-op
 	}
 
 	if n.Left != nil && n.Left.Op == ONAME {
@@ -705,24 +690,19 @@ func structfield(n *Node) *Field {
 // checkdupfields emits errors for duplicately named fields or methods in
 // a list of struct or interface types.
 func checkdupfields(what string, ts ...*Type) {
-	lno := lineno
-
 	seen := make(map[*Sym]bool)
 	for _, t := range ts {
 		for _, f := range t.Fields().Slice() {
-			if f.Sym == nil || f.Nname == nil || isblank(f.Nname) {
+			if f.Sym == nil || isblanksym(f.Sym) || f.Nname == nil {
 				continue
 			}
 			if seen[f.Sym] {
-				lineno = f.Nname.Pos
-				yyerror("duplicate %s %s", what, f.Sym.Name)
+				yyerrorl(f.Nname.Pos, "duplicate %s %s", what, f.Sym.Name)
 				continue
 			}
 			seen[f.Sym] = true
 		}
 	}
-
-	lineno = lno
 }
 
 // convert a parsed id/type list into
@@ -805,50 +785,26 @@ func interfacefield(n *Node) *Field {
 		yyerror("interface method cannot have annotation")
 	}
 
-	f := newField()
-	f.SetIsddd(n.Isddd())
+	// MethodSpec = MethodName Signature | InterfaceTypeName .
+	//
+	// If Left != nil, then Left is MethodName and Right is Signature.
+	// Otherwise, Right is InterfaceTypeName.
 
 	if n.Right != nil {
-		if n.Left != nil {
-			// queue resolution of method type for later.
-			// right now all we need is the name list.
-			// avoids cycles for recursive interface types.
-			n.Type = typ(TINTERMETH)
-			n.Type.SetNname(n.Right)
-			n.Left.Type = n.Type
-			queuemethod(n)
-
-			if n.Left.Op == ONAME {
-				f.Nname = n.Left
-				f.Embedded = n.Embedded
-				f.Sym = f.Nname.Sym
-			}
-		} else {
-			n.Right = typecheck(n.Right, Etype)
-			n.Type = n.Right.Type
-
-			if n.Embedded != 0 {
-				checkembeddedtype(n.Type)
-			}
-
-			if n.Type != nil {
-				switch n.Type.Etype {
-				case TINTER:
-					break
-
-				case TFORW:
-					yyerror("interface type loop involving %v", n.Type)
-					f.SetBroke(true)
-
-				default:
-					yyerror("interface contains embedded non-interface %v", n.Type)
-					f.SetBroke(true)
-				}
-			}
-		}
+		n.Right = typecheck(n.Right, Etype)
+		n.Type = n.Right.Type
+		n.Right = nil
 	}
 
-	n.Right = nil
+	f := newField()
+	if n.Left != nil {
+		f.Nname = n.Left
+		f.Sym = f.Nname.Sym
+	} else {
+		// Placeholder ONAME just to hold Pos.
+		// TODO(mdempsky): Add Pos directly to Field instead.
+		f.Nname = newname(nblank.Sym)
+	}
 
 	f.Type = n.Type
 	if f.Type == nil {
@@ -860,6 +816,9 @@ func interfacefield(n *Node) *Field {
 }
 
 func tointerface(l []*Node) *Type {
+	if len(l) == 0 {
+		return Types[TINTER]
+	}
 	t := typ(TINTER)
 	tointerface0(t, l)
 	return t
@@ -873,31 +832,12 @@ func tointerface0(t *Type, l []*Node) *Type {
 	var fields []*Field
 	for _, n := range l {
 		f := interfacefield(n)
-
-		if n.Left == nil && f.Type.IsInterface() {
-			// embedded interface, inline methods
-			for _, t1 := range f.Type.Fields().Slice() {
-				f = newField()
-				f.Type = t1.Type
-				f.SetBroke(t1.Broke())
-				f.Sym = t1.Sym
-				if f.Sym != nil {
-					f.Nname = newname(f.Sym)
-				}
-				fields = append(fields, f)
-			}
-		} else {
-			fields = append(fields, f)
-		}
 		if f.Broke() {
 			t.SetBroke(true)
 		}
+		fields = append(fields, f)
 	}
-	sort.Sort(methcmp(fields))
-	t.SetFields(fields)
-
-	checkdupfields("method", t)
-	checkwidth(t)
+	t.SetInterface(fields)
 
 	return t
 }
@@ -934,14 +874,14 @@ var thisT *Type
 
 func fakethis() *Node {
 	if thisT == nil {
-		thisT = ptrto(typ(TSTRUCT))
+		thisT = typPtr(typ(TSTRUCT))
 	}
 	return nod(ODCLFIELD, nil, typenod(thisT))
 }
 
 func fakethisfield() *Field {
 	if thisT == nil {
-		thisT = ptrto(typ(TSTRUCT))
+		thisT = typPtr(typ(TSTRUCT))
 	}
 	f := newField()
 	f.Type = thisT
@@ -1043,13 +983,13 @@ func methodsym(nsym *Sym, t0 *Type, iface int) *Sym {
 	// if t0 == *t and t0 has a sym,
 	// we want to see *t, not t0, in the method name.
 	if t != t0 && t0.Sym != nil {
-		t0 = ptrto(t)
+		t0 = typPtr(t)
 	}
 
 	suffix = ""
 	if iface != 0 {
 		dowidth(t0)
-		if t0.Width < Types[Tptr].Width {
+		if t0.Width < int64(Widthptr) {
 			suffix = "·i"
 		}
 	}
@@ -1199,9 +1139,6 @@ func addmethod(msym *Sym, t *Type, local, nointerface bool) {
 }
 
 func funccompile(n *Node) {
-	Stksize = BADWIDTH
-	Maxarg = 0
-
 	if n.Type == nil {
 		if nerrors == 0 {
 			Fatalf("funccompile missing type")
@@ -1216,32 +1153,44 @@ func funccompile(n *Node) {
 		Fatalf("funccompile %v inside %v", n.Func.Nname.Sym, Curfn.Func.Nname.Sym)
 	}
 
-	Stksize = 0
 	dclcontext = PAUTO
 	funcdepth = n.Func.Depth + 1
 	compile(n)
 	Curfn = nil
-	pc = nil
 	funcdepth = 0
 	dclcontext = PEXTERN
 }
 
-func funcsym(s *Sym) *Sym {
-	if s.Fsym != nil {
-		return s.Fsym
-	}
-
-	s1 := Pkglookup(s.Name+"·f", s.Pkg)
-	if !Ctxt.Flag_dynlink && s1.Def == nil {
-		s1.Def = newfuncname(s1)
-		s1.Def.Func.Shortname = s
-		funcsyms = append(funcsyms, s1.Def)
-	}
-	s.Fsym = s1
-	return s1
+func (s *Sym) funcsymname() string {
+	return s.Name + "·f"
 }
 
+// funcsym returns s·f.
+func funcsym(s *Sym) *Sym {
+	sf, existed := s.Pkg.LookupOK(s.funcsymname())
+	// Don't export s·f when compiling for dynamic linking.
+	// When dynamically linking, the necessary function
+	// symbols will be created explicitly with makefuncsym.
+	// See the makefuncsym comment for details.
+	if !Ctxt.Flag_dynlink && !existed {
+		funcsyms = append(funcsyms, s)
+	}
+	return sf
+}
+
+// makefuncsym ensures that s·f is exported.
+// It is only used with -dynlink.
+// When not compiling for dynamic linking,
+// the funcsyms are created as needed by
+// the packages that use them.
+// Normally we emit the s·f stubs as DUPOK syms,
+// but DUPOK doesn't work across shared library boundaries.
+// So instead, when dynamic linking, we only create
+// the s·f stubs in s's package.
 func makefuncsym(s *Sym) {
+	if !Ctxt.Flag_dynlink {
+		Fatalf("makefuncsym dynlink")
+	}
 	if isblanksym(s) {
 		return
 	}
@@ -1250,13 +1199,9 @@ func makefuncsym(s *Sym) {
 		// not get a funcsym.
 		return
 	}
-	s1 := funcsym(s)
-	if s1.Def != nil {
-		return
+	if _, existed := s.Pkg.LookupOK(s.funcsymname()); !existed {
+		funcsyms = append(funcsyms, s)
 	}
-	s1.Def = newfuncname(s1)
-	s1.Def.Func.Shortname = s
-	funcsyms = append(funcsyms, s1.Def)
 }
 
 type nowritebarrierrecChecker struct {

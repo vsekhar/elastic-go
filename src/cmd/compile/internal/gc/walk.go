@@ -68,6 +68,7 @@ func walk(fn *Node) {
 		dumplist(s, Curfn.Nbody)
 	}
 
+	zeroResults()
 	heapmoves()
 	if Debug['W'] != 0 && Curfn.Func.Enter.Len() > 0 {
 		s := fmt.Sprintf("enter %v", Curfn.Func.Nname.Sym)
@@ -119,7 +120,7 @@ func adjustargs(n *Node, adjust int) {
 	callfunc := n.Left
 	for _, arg = range callfunc.List.Slice() {
 		if arg.Op != OAS {
-			yyerror("call arg not assignment")
+			Fatalf("call arg not assignment")
 		}
 		lhs = arg.Left
 		if lhs.Op == ONAME {
@@ -129,12 +130,12 @@ func adjustargs(n *Node, adjust int) {
 		}
 
 		if lhs.Op != OINDREGSP {
-			yyerror("call argument store does not use OINDREGSP")
+			Fatalf("call argument store does not use OINDREGSP")
 		}
 
 		// can't really check this in machine-indep code.
 		//if(lhs->val.u.reg != D_SP)
-		//      yyerror("call arg assign not indreg(SP)");
+		//      Fatalf("call arg assign not indreg(SP)")
 		lhs.Xoffset += int64(adjust)
 	}
 }
@@ -202,7 +203,7 @@ func walkstmt(n *Node) *Node {
 		n.Ninit.Set(nil)
 
 		n.Left = walkexpr(n.Left, &init)
-		n = mkcall1(chanfn("chanrecv1", 2, n.Left.Type), nil, &init, typename(n.Left.Type), n.Left, nodnil())
+		n = mkcall1(chanfn("chanrecv1", 2, n.Left.Type), nil, &init, n.Left, nodnil())
 		n = walkexpr(n, &init)
 
 		n = addinit(n, init.Slice())
@@ -246,7 +247,7 @@ func walkstmt(n *Node) *Node {
 		n.Right = walkstmt(n.Right)
 
 	case ODEFER:
-		hasdefer = true
+		Curfn.Func.SetHasDefer(true)
 		switch n.Left.Op {
 		case OPRINT, OPRINTN:
 			n.Left = walkprintfunc(n.Left, &n.Ninit)
@@ -497,24 +498,18 @@ opswitch:
 		Dump("walk", n)
 		Fatalf("walkexpr: switch 1 unknown op %+S", n)
 
-	case OTYPE,
-		ONONAME,
-		OINDREGSP,
-		OEMPTY,
-		OGETG:
+	case ONONAME, OINDREGSP, OEMPTY, OGETG:
 
-	case ONOT,
-		OMINUS,
-		OPLUS,
-		OCOM,
-		OREAL,
-		OIMAG,
-		ODOTMETH,
-		ODOTINTER:
+	case OTYPE, ONAME, OLITERAL:
+		// TODO(mdempsky): Just return n; see discussion on CL 38655.
+
+	case ONOT, OMINUS, OPLUS, OCOM, OREAL, OIMAG, ODOTMETH, ODOTINTER,
+		OIND, OSPTR, OITAB, OIDATA, ODOTTYPE, ODOTTYPE2, OADDR:
 		n.Left = walkexpr(n.Left, init)
 
-	case OIND:
+	case OEFACE, OAND, OSUB, OMUL, OLT, OLE, OGE, OGT, OADD, OOR, OXOR:
 		n.Left = walkexpr(n.Left, init)
+		n.Right = walkexpr(n.Right, init)
 
 	case ODOT:
 		usefield(n)
@@ -529,13 +524,6 @@ opswitch:
 			checknil(n.Left, init)
 		}
 
-		n.Left = walkexpr(n.Left, init)
-
-	case OEFACE:
-		n.Left = walkexpr(n.Left, init)
-		n.Right = walkexpr(n.Right, init)
-
-	case OSPTR, OITAB, OIDATA:
 		n.Left = walkexpr(n.Left, init)
 
 	case OLEN, OCAP:
@@ -562,19 +550,6 @@ opswitch:
 		if Debug['m'] != 0 && n.Etype != 0 && !Isconst(n.Right, CTINT) {
 			Warn("shift bounds check elided")
 		}
-
-	case OAND,
-		OSUB,
-		OMUL,
-		OLT,
-		OLE,
-		OGE,
-		OGT,
-		OADD,
-		OOR,
-		OXOR:
-		n.Left = walkexpr(n.Left, init)
-		n.Right = walkexpr(n.Right, init)
 
 	case OCOMPLEX:
 		// Use results from call expression as arguments for complex.
@@ -621,13 +596,7 @@ opswitch:
 	case ORECOVER:
 		n = mkcall("gorecover", n.Type, init, nod(OADDR, nodfp, nil))
 
-	case OLITERAL:
-		n.SetAddable(true)
-
 	case OCLOSUREVAR, OCFUNC:
-		n.SetAddable(true)
-
-	case ONAME:
 		n.SetAddable(true)
 
 	case OCALLINTER:
@@ -718,7 +687,7 @@ opswitch:
 
 			n1 := nod(OADDR, n.Left, nil)
 			r := n.Right.Left // the channel
-			n = mkcall1(chanfn("chanrecv1", 2, r.Type), nil, init, typename(r.Type), r, n1)
+			n = mkcall1(chanfn("chanrecv1", 2, r.Type), nil, init, r, n1)
 			n = walkexpr(n, init)
 			break opswitch
 
@@ -789,11 +758,11 @@ opswitch:
 		n1.Etype = 1 // addr does not escape
 		fn := chanfn("chanrecv2", 2, r.Left.Type)
 		ok := n.List.Second()
-		call := mkcall1(fn, ok.Type, init, typename(r.Left.Type), r.Left, n1)
+		call := mkcall1(fn, ok.Type, init, r.Left, n1)
 		n = nod(OAS, ok, call)
 		n = typecheck(n, Etop)
 
-		// a,b = m[i];
+	// a,b = m[i]
 	case OAS2MAPR:
 		init.AppendNodes(&n.Ninit)
 
@@ -803,16 +772,15 @@ opswitch:
 		r.Right = walkexpr(r.Right, init)
 		t := r.Left.Type
 
-		_, p := mapaccessfast(t)
+		fast := mapfast(t)
 		var key *Node
-		if p != "" {
+		if fast != mapslow {
 			// fast versions take key by value
 			key = r.Right
 		} else {
 			// standard version takes key by reference
 			// orderexpr made sure key is addressable.
 			key = nod(OADDR, r.Right, nil)
-			p = "mapaccess2"
 		}
 
 		// from:
@@ -823,7 +791,7 @@ opswitch:
 		a := n.List.First()
 
 		if w := t.Val().Width; w <= 1024 { // 1024 must match ../../../../runtime/hashmap.go:maxZero
-			fn := mapfn(p, t)
+			fn := mapfn(mapaccess2[fast], t)
 			r = mkcall1(fn, fn.Type.Results(), init, typename(t), r.Left, key)
 		} else {
 			fn := mapfn("mapaccess2_fat", t)
@@ -842,7 +810,7 @@ opswitch:
 
 		// don't generate a = *var if a is _
 		if !isblank(a) {
-			var_ := temp(ptrto(t.Val()))
+			var_ := temp(typPtr(t.Val()))
 			var_.Typecheck = 1
 			var_.SetNonNil(true) // mapaccess always returns a non-nil pointer
 			n.List.SetFirst(var_)
@@ -861,19 +829,18 @@ opswitch:
 		map_ = walkexpr(map_, init)
 		key = walkexpr(key, init)
 
-		// orderstmt made sure key is addressable.
-		key = nod(OADDR, key, nil)
-
 		t := map_.Type
-		n = mkcall1(mapfndel("mapdelete", t), nil, init, typename(t), map_, key)
+		fast := mapfast(t)
+		if fast == mapslow {
+			// orderstmt made sure key is addressable.
+			key = nod(OADDR, key, nil)
+		}
+		n = mkcall1(mapfndel(mapdelete[fast], t), nil, init, typename(t), map_, key)
 
 	case OAS2DOTTYPE:
 		walkexprlistsafe(n.List.Slice(), init)
 		e := n.Rlist.First() // i.(T)
 		e.Left = walkexpr(e.Left, init)
-
-	case ODOTTYPE, ODOTTYPE2:
-		n.Left = walkexpr(n.Left, init)
 
 	case OCONVIFACE:
 		n.Left = walkexpr(n.Left, init)
@@ -953,7 +920,7 @@ opswitch:
 			init.Append(nod(OAS, c, n.Left))
 
 			// Get the itab out of the interface.
-			tmp := temp(ptrto(Types[TUINT8]))
+			tmp := temp(typPtr(Types[TUINT8]))
 			init.Append(nod(OAS, tmp, typecheck(nod(OITAB, c, nil), Erv)))
 
 			// Get the type out of the itab.
@@ -962,7 +929,7 @@ opswitch:
 			init.Append(nif)
 
 			// Build the result.
-			e := nod(OEFACE, tmp, ifaceData(c, ptrto(Types[TUINT8])))
+			e := nod(OEFACE, tmp, ifaceData(c, typPtr(Types[TUINT8])))
 			e.Type = n.Type // assign type manually, typecheck doesn't understand OEFACE.
 			e.Typecheck = 1
 			n = e
@@ -1008,7 +975,7 @@ opswitch:
 		n = walkexpr(n, init)
 
 	case OCONV, OCONVNOP:
-		if Thearch.LinkArch.Family == sys.ARM || Thearch.LinkArch.Family == sys.MIPS {
+		if thearch.LinkArch.Family == sys.ARM || thearch.LinkArch.Family == sys.MIPS {
 			if n.Left.Type.IsFloat() {
 				if n.Type.Etype == TINT64 {
 					n = mkcall("float64toint64", n.Type, init, conv(n.Left, Types[TFLOAT64]))
@@ -1034,7 +1001,7 @@ opswitch:
 			}
 		}
 
-		if Thearch.LinkArch.Family == sys.I386 {
+		if thearch.LinkArch.Family == sys.I386 {
 			if n.Left.Type.IsFloat() {
 				if n.Type.Etype == TINT64 {
 					n = mkcall("float64toint64", n.Type, init, conv(n.Left, Types[TFLOAT64]))
@@ -1183,28 +1150,30 @@ opswitch:
 		t := map_.Type
 		if n.Etype == 1 {
 			// This m[k] expression is on the left-hand side of an assignment.
-			// orderexpr made sure key is addressable.
-			key = nod(OADDR, key, nil)
-			n = mkcall1(mapfn("mapassign", t), nil, init, typename(t), map_, key)
-		} else {
-			// m[k] is not the target of an assignment.
-			p, _ := mapaccessfast(t)
-			if p == "" {
+			fast := mapfast(t)
+			if fast == mapslow {
 				// standard version takes key by reference.
 				// orderexpr made sure key is addressable.
 				key = nod(OADDR, key, nil)
-				p = "mapaccess1"
+			}
+			n = mkcall1(mapfn(mapassign[fast], t), nil, init, typename(t), map_, key)
+		} else {
+			// m[k] is not the target of an assignment.
+			fast := mapfast(t)
+			if fast == mapslow {
+				// standard version takes key by reference.
+				// orderexpr made sure key is addressable.
+				key = nod(OADDR, key, nil)
 			}
 
 			if w := t.Val().Width; w <= 1024 { // 1024 must match ../../../../runtime/hashmap.go:maxZero
-				n = mkcall1(mapfn(p, t), ptrto(t.Val()), init, typename(t), map_, key)
+				n = mkcall1(mapfn(mapaccess1[fast], t), typPtr(t.Val()), init, typename(t), map_, key)
 			} else {
-				p = "mapaccess1_fat"
 				z := zeroaddr(w)
-				n = mkcall1(mapfn(p, t), ptrto(t.Val()), init, typename(t), map_, key, z)
+				n = mkcall1(mapfn("mapaccess1_fat", t), typPtr(t.Val()), init, typename(t), map_, key, z)
 			}
 		}
-		n.Type = ptrto(t.Val())
+		n.Type = typPtr(t.Val())
 		n.SetNonNil(true) // mapaccess1* and mapassign always return non-nil pointers.
 		n = nod(OIND, n, nil)
 		n.Type = t.Val()
@@ -1237,9 +1206,6 @@ opswitch:
 		} else {
 			n = reduceSlice(n)
 		}
-
-	case OADDR:
-		n.Left = walkexpr(n.Left, init)
 
 	case ONEW:
 		if n.Esc == EscNone {
@@ -1556,24 +1522,29 @@ opswitch:
 
 		n.Right = cheapexpr(n.Right, init)
 		n.Left = cheapexpr(n.Left, init)
-		fn = substArgTypes(fn, n.Right.Type, n.Left.Type)
-		r := mkcall1(fn, n.Type, init, n.Left, n.Right)
-		// TODO(marvin): Fix Node.EType type union.
-		if Op(n.Etype) == ONE {
-			r = nod(ONOT, r, nil)
-		}
+		lt := nod(OITAB, n.Left, nil)
+		rt := nod(OITAB, n.Right, nil)
+		ld := nod(OIDATA, n.Left, nil)
+		rd := nod(OIDATA, n.Right, nil)
+		ld.Type = Types[TUNSAFEPTR]
+		rd.Type = Types[TUNSAFEPTR]
+		ld.Typecheck = 1
+		rd.Typecheck = 1
+		call := mkcall1(fn, n.Type, init, lt, ld, rd)
 
-		// check itable/type before full compare.
+		// Check itable/type before full compare.
+		// Note: short-circuited because order matters.
 		// TODO(marvin): Fix Node.EType type union.
+		var cmp *Node
 		if Op(n.Etype) == OEQ {
-			r = nod(OANDAND, nod(OEQ, nod(OITAB, n.Left, nil), nod(OITAB, n.Right, nil)), r)
+			cmp = nod(OANDAND, nod(OEQ, lt, rt), call)
 		} else {
-			r = nod(OOROR, nod(ONE, nod(OITAB, n.Left, nil), nod(OITAB, n.Right, nil)), r)
+			cmp = nod(OOROR, nod(ONE, lt, rt), nod(ONOT, call, nil))
 		}
-		r = typecheck(r, Erv)
-		r = walkexpr(r, init)
-		r.Type = n.Type
-		n = r
+		cmp = typecheck(cmp, Erv)
+		cmp = walkexpr(cmp, init)
+		cmp.Type = n.Type
+		n = cmp
 
 	case OARRAYLIT, OSLICELIT, OMAPLIT, OSTRUCTLIT, OPTRLIT:
 		if isStaticCompositeLiteral(n) {
@@ -1595,7 +1566,7 @@ opswitch:
 		n1 = assignconv(n1, n.Left.Type.Elem(), "chan send")
 		n1 = walkexpr(n1, init)
 		n1 = nod(OADDR, n1, nil)
-		n = mkcall1(chanfn("chansend1", 2, n.Left.Type), nil, init, typename(n.Left.Type), n.Left, n1)
+		n = mkcall1(chanfn("chansend1", 2, n.Left.Type), nil, init, n.Left, n1)
 
 	case OCLOSURE:
 		n = walkclosure(n, init)
@@ -1610,9 +1581,10 @@ opswitch:
 	// walk of y%1 may have replaced it by 0.
 	// Check whether n with its updated args is itself now a constant.
 	t := n.Type
-
 	evconst(n)
-	n.Type = t
+	if n.Type != t {
+		Fatalf("evconst changed Type: %v had type %v, now %v", n, t, n.Type)
+	}
 	if n.Op == OLITERAL {
 		n = typecheck(n, Erv)
 	}
@@ -1688,7 +1660,7 @@ func ascompatee(op Op, nl, nr []*Node, init *Nodes) []*Node {
 		var nln, nrn Nodes
 		nln.Set(nl)
 		nrn.Set(nr)
-		yyerror("error in shape across %+v %v %+v / %d %d [%s]", nln, op, nrn, len(nl), len(nr), Curfn.Func.Nname.Sym.Name)
+		Fatalf("error in shape across %+v %v %+v / %d %d [%s]", nln, op, nrn, len(nl), len(nr), Curfn.Func.Nname.Sym.Name)
 	}
 	return nn
 }
@@ -1754,7 +1726,7 @@ func ascompatet(op Op, nl Nodes, nr *Type) []*Node {
 	}
 
 	if i < nl.Len() || r != nil {
-		yyerror("ascompatet: assignment count mismatch: %d = %d", nl.Len(), nr.NumFields())
+		Fatalf("ascompatet: assignment count mismatch: %d = %d", nl.Len(), nr.NumFields())
 	}
 
 	if ullmanOverflow {
@@ -1969,7 +1941,7 @@ func callnew(t *Type) *Node {
 	dowidth(t)
 	fn := syslook("newobject")
 	fn = substArgTypes(fn, t)
-	v := mkcall1(fn, ptrto(t), nil, typename(t))
+	v := mkcall1(fn, typPtr(t), nil, typename(t))
 	v.SetNonNil(true)
 	return v
 }
@@ -2466,20 +2438,9 @@ func vmatch1(l *Node, r *Node) bool {
 
 // paramstoheap returns code to allocate memory for heap-escaped parameters
 // and to copy non-result prameters' values from the stack.
-// If out is true, then code is also produced to zero-initialize their
-// stack memory addresses.
 func paramstoheap(params *Type) []*Node {
 	var nn []*Node
 	for _, t := range params.Fields().Slice() {
-		// For precise stacks, the garbage collector assumes results
-		// are always live, so zero them always.
-		if params.StructType().Funarg == FunargResults {
-			// Defer might stop a panic and show the
-			// return values as they exist at the time of panic.
-			// Make sure to zero them on entry to the function.
-			nn = append(nn, nod(OAS, nodarg(t, 1), nil))
-		}
-
 		v := t.Nname
 		if v != nil && v.Sym != nil && strings.HasPrefix(v.Sym.Name, "~r") { // unnamed result
 			v = nil
@@ -2497,6 +2458,29 @@ func paramstoheap(params *Type) []*Node {
 	}
 
 	return nn
+}
+
+// zeroResults zeros the return values at the start of the function.
+// We need to do this very early in the function.  Defer might stop a
+// panic and show the return values as they exist at the time of
+// panic.  For precise stacks, the garbage collector assumes results
+// are always live, so we need to zero them before any allocations,
+// even allocations to move params/results to the heap.
+// The generated code is added to Curfn's Enter list.
+func zeroResults() {
+	lno := lineno
+	lineno = Curfn.Pos
+	for _, f := range Curfn.Type.Results().Fields().Slice() {
+		if v := f.Nname; v != nil && v.Name.Param.Heapaddr != nil {
+			// The local which points to the return value is the
+			// thing that needs zeroing. This is already handled
+			// by a Needzero annotation in plive.go:livenessepilogue.
+			continue
+		}
+		// Zero the stack location containing f.
+		Curfn.Func.Enter.Append(nod(OAS, nodarg(f, 1), nil))
+	}
+	lineno = lno
 }
 
 // returnsfromheap returns code to copy values for heap-escaped parameters
@@ -2615,21 +2599,39 @@ func mapfndel(name string, t *Type) *Node {
 	return fn
 }
 
-// mapaccessfast returns the names of the fast map access runtime routines for t.
-func mapaccessfast(t *Type) (access1, access2 string) {
+const (
+	mapslow = iota
+	mapfast32
+	mapfast64
+	mapfaststr
+	nmapfast
+)
+
+type mapnames [nmapfast]string
+
+func mkmapnames(base string) mapnames {
+	return mapnames{base, base + "_fast32", base + "_fast64", base + "_faststr"}
+}
+
+var mapaccess1 mapnames = mkmapnames("mapaccess1")
+var mapaccess2 mapnames = mkmapnames("mapaccess2")
+var mapassign mapnames = mkmapnames("mapassign")
+var mapdelete mapnames = mkmapnames("mapdelete")
+
+func mapfast(t *Type) int {
 	// Check ../../runtime/hashmap.go:maxValueSize before changing.
 	if t.Val().Width > 128 {
-		return "", ""
+		return mapslow
 	}
 	switch algtype(t.Key()) {
 	case AMEM32:
-		return "mapaccess1_fast32", "mapaccess2_fast32"
+		return mapfast32
 	case AMEM64:
-		return "mapaccess1_fast64", "mapaccess2_fast64"
+		return mapfast64
 	case ASTRING:
-		return "mapaccess1_faststr", "mapaccess2_faststr"
+		return mapfaststr
 	}
-	return "", ""
+	return mapslow
 }
 
 func writebarrierfn(name string, l *Type, r *Type) *Node {
@@ -2643,7 +2645,7 @@ func addstr(n *Node, init *Nodes) *Node {
 	c := n.List.Len()
 
 	if c < 2 {
-		yyerror("addstr count %d too small", c)
+		Fatalf("addstr count %d too small", c)
 	}
 
 	buf := nodnil()
@@ -2990,8 +2992,8 @@ func eqfor(t *Type, needsize *int) *Node {
 		n := newname(sym)
 		n.Class = PFUNC
 		ntype := nod(OTFUNC, nil, nil)
-		ntype.List.Append(nod(ODCLFIELD, nil, typenod(ptrto(t))))
-		ntype.List.Append(nod(ODCLFIELD, nil, typenod(ptrto(t))))
+		ntype.List.Append(nod(ODCLFIELD, nil, typenod(typPtr(t))))
+		ntype.List.Append(nod(ODCLFIELD, nil, typenod(typPtr(t))))
 		ntype.Rlist.Append(nod(ODCLFIELD, nil, typenod(Types[TBOOL])))
 		ntype = typecheck(ntype, Etype)
 		n.Type = ntype.Type
@@ -3036,7 +3038,7 @@ func walkcompare(n *Node, init *Nodes) *Node {
 		tab := nod(OITAB, l, nil)
 		rtyp := typename(r.Type)
 		if l.Type.IsEmptyInterface() {
-			tab.Type = ptrto(Types[TUINT8])
+			tab.Type = typPtr(Types[TUINT8])
 			tab.Typecheck = 1
 			eqtype = nod(eq, tab, rtyp)
 		} else {
@@ -3093,13 +3095,13 @@ func walkcompare(n *Node, init *Nodes) *Node {
 		}
 
 		// eq algs take pointers
-		pl := temp(ptrto(t))
+		pl := temp(typPtr(t))
 		al := nod(OAS, pl, nod(OADDR, cmpl, nil))
 		al.Right.Etype = 1 // addr does not escape
 		al = typecheck(al, Etop)
 		init.Append(al)
 
-		pr := temp(ptrto(t))
+		pr := temp(typPtr(t))
 		ar := nod(OAS, pr, nod(OADDR, cmpr, nil))
 		ar.Right.Etype = 1 // addr does not escape
 		ar = typecheck(ar, Etop)

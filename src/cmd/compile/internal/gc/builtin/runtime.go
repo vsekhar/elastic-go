@@ -87,8 +87,10 @@ func panicdottypeE(have, want, iface *byte)
 func panicdottypeI(have, want, iface *byte)
 func panicnildottype(want *byte)
 
-func ifaceeq(i1 any, i2 any) (ret bool)
-func efaceeq(i1 any, i2 any) (ret bool)
+// interface equality. Type/itab pointers are already known to be equal, so
+// we only need to pass one.
+func ifaceeq(tab *uintptr, x, y unsafe.Pointer) (ret bool)
+func efaceeq(typ *uintptr, x, y unsafe.Pointer) (ret bool)
 
 // *byte is really *runtime.Type
 func makemap(mapType *byte, hint int64, mapbuf *any, bucketbuf *any) (hmap map[any]any)
@@ -103,15 +105,21 @@ func mapaccess2_fast64(mapType *byte, hmap map[any]any, key any) (val *any, pres
 func mapaccess2_faststr(mapType *byte, hmap map[any]any, key any) (val *any, pres bool)
 func mapaccess2_fat(mapType *byte, hmap map[any]any, key *any, zero *byte) (val *any, pres bool)
 func mapassign(mapType *byte, hmap map[any]any, key *any) (val *any)
+func mapassign_fast32(mapType *byte, hmap map[any]any, key any) (val *any)
+func mapassign_fast64(mapType *byte, hmap map[any]any, key any) (val *any)
+func mapassign_faststr(mapType *byte, hmap map[any]any, key any) (val *any)
 func mapiterinit(mapType *byte, hmap map[any]any, hiter *any)
 func mapdelete(mapType *byte, hmap map[any]any, key *any)
+func mapdelete_fast32(mapType *byte, hmap map[any]any, key any)
+func mapdelete_fast64(mapType *byte, hmap map[any]any, key any)
+func mapdelete_faststr(mapType *byte, hmap map[any]any, key any)
 func mapiternext(hiter *any)
 
 // *byte is really *runtime.Type
 func makechan(chanType *byte, hint int64) (hchan chan any)
-func chanrecv1(chanType *byte, hchan <-chan any, elem *any)
-func chanrecv2(chanType *byte, hchan <-chan any, elem *any) bool
-func chansend1(chanType *byte, hchan chan<- any, elem *any)
+func chanrecv1(hchan <-chan any, elem *any)
+func chanrecv2(hchan <-chan any, elem *any) bool
+func chansend1(hchan chan<- any, elem *any)
 func closechan(hchan any)
 
 var writeBarrier struct {
@@ -129,9 +137,9 @@ func typedmemmove(typ *byte, dst *any, src *any)
 func typedmemclr(typ *byte, dst *any)
 func typedslicecopy(typ *byte, dst any, src any) int
 
-func selectnbsend(chanType *byte, hchan chan<- any, elem *any) bool
-func selectnbrecv(chanType *byte, elem *any, hchan <-chan any) bool
-func selectnbrecv2(chanType *byte, elem *any, received *bool, hchan <-chan any) bool
+func selectnbsend(hchan chan<- any, elem *any) bool
+func selectnbrecv(elem *any, hchan <-chan any) bool
+func selectnbrecv2(elem *any, received *bool, hchan <-chan any) bool
 
 func newselect(sel *byte, selsize int64, size int32)
 func selectsend(sel *byte, hchan chan<- any, elem *any)

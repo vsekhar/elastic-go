@@ -59,7 +59,7 @@ func Getgoextlinkenabled() string {
 }
 
 func (p *Prog) Line() string {
-	return p.Ctxt.OutermostPos(p.Pos).String()
+	return p.Ctxt.OutermostPos(p.Pos).Format(false)
 }
 
 var armCondCode = []string{
@@ -492,9 +492,6 @@ var Anames = []string{
 	"RET",
 	"TEXT",
 	"UNDEF",
-	"VARDEF",
-	"VARKILL",
-	"VARLIVE",
 }
 
 func Bool2int(b bool) int {

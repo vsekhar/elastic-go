@@ -87,7 +87,7 @@ func hcrash() {
 }
 
 func linestr(pos src.XPos) string {
-	return Ctxt.OutermostPos(pos).String()
+	return Ctxt.OutermostPos(pos).Format(Debug['C'] == 0)
 }
 
 // lasterror keeps track of the most recently issued error.
@@ -254,14 +254,20 @@ var nopkg = &Pkg{
 }
 
 func (pkg *Pkg) Lookup(name string) *Sym {
+	s, _ := pkg.LookupOK(name)
+	return s
+}
+
+// LookupOK looks up name in pkg and reports whether it previously existed.
+func (pkg *Pkg) LookupOK(name string) (s *Sym, existed bool) {
 	if pkg == nil {
 		pkg = nopkg
 	}
 	if s := pkg.Syms[name]; s != nil {
-		return s
+		return s, true
 	}
 
-	s := &Sym{
+	s = &Sym{
 		Name: name,
 		Pkg:  pkg,
 	}
@@ -269,7 +275,7 @@ func (pkg *Pkg) Lookup(name string) *Sym {
 		initSyms = append(initSyms, s)
 	}
 	pkg.Syms[name] = s
-	return s
+	return s, false
 }
 
 func (pkg *Pkg) LookupBytes(name []byte) *Sym {
@@ -332,7 +338,11 @@ func importdot(opkg *Pkg, pack *Node) {
 	}
 }
 
-func nod(op Op, nleft *Node, nright *Node) *Node {
+func nod(op Op, nleft, nright *Node) *Node {
+	return nodl(lineno, op, nleft, nright)
+}
+
+func nodl(pos src.XPos, op Op, nleft, nright *Node) *Node {
 	var n *Node
 	switch op {
 	case OCLOSURE, ODCLFUNC:
@@ -342,16 +352,8 @@ func nod(op Op, nleft *Node, nright *Node) *Node {
 		}
 		n = &x.Node
 		n.Func = &x.Func
-		n.Func.SetIsHiddenClosure(Curfn != nil)
 	case ONAME:
-		var x struct {
-			Node
-			Name
-			Param
-		}
-		n = &x.Node
-		n.Name = &x.Name
-		n.Name.Param = &x.Param
+		Fatalf("use newname instead")
 	case OLABEL, OPACK:
 		var x struct {
 			Node
@@ -365,12 +367,34 @@ func nod(op Op, nleft *Node, nright *Node) *Node {
 	n.Op = op
 	n.Left = nleft
 	n.Right = nright
-	n.Pos = lineno
+	n.Pos = pos
 	n.Xoffset = BADWIDTH
 	n.Orig = n
-	if n.Name != nil {
-		n.Name.Curfn = Curfn
+	return n
+}
+
+// newname returns a new ONAME Node associated with symbol s.
+func newname(s *Sym) *Node {
+	if s == nil {
+		Fatalf("newname nil")
 	}
+
+	var x struct {
+		Node
+		Name
+		Param
+	}
+	n := &x.Node
+	n.Name = &x.Name
+	n.Name.Param = &x.Param
+
+	n.Op = ONAME
+	n.Pos = lineno
+	n.Name.Curfn = Curfn
+	n.Orig = n
+
+	n.Sym = s
+	n.SetAddable(true)
 	return n
 }
 
@@ -719,7 +743,7 @@ func assignop(src *Type, dst *Type, why *string) Op {
 
 	// TODO(rsc,lvd): This behaves poorly in the presence of inlining.
 	// https://golang.org/issue/2795
-	if safemode && importpkg == nil && src != nil && src.Etype == TUNSAFEPTR {
+	if safemode && !inimport && src != nil && src.Etype == TUNSAFEPTR {
 		yyerror("cannot use unsafe.Pointer")
 		errorexit()
 	}
@@ -1078,6 +1102,23 @@ func (o Op) IsSlice3() bool {
 	return false
 }
 
+// labeledControl returns the control flow Node (for, switch, select)
+// associated with the label n, if any.
+func (n *Node) labeledControl() *Node {
+	if n.Op != OLABEL {
+		Fatalf("labeledControl %v", n.Op)
+	}
+	ctl := n.Name.Defn
+	if ctl == nil {
+		return nil
+	}
+	switch ctl.Op {
+	case OFOR, OFORUNTIL, OSWITCH, OSELECT:
+		return ctl
+	}
+	return nil
+}
+
 func syslook(name string) *Node {
 	s := Pkglookup(name, Runtimepkg)
 	if s == nil || s.Def == nil {
@@ -1086,30 +1127,13 @@ func syslook(name string) *Node {
 	return s.Def
 }
 
-// typehash computes a hash value for type t to use in type switch
-// statements.
+// typehash computes a hash value for type t to use in type switch statements.
 func typehash(t *Type) uint32 {
-	// t.tconv(FmtLeft | FmtUnsigned) already contains all the necessary logic
-	// to generate a representation that completely describes the type, so using
-	// it here avoids duplicating that code.
-	// See the comments in exprSwitch.checkDupCases.
-	p := t.tconv(FmtLeft | FmtUnsigned)
+	p := t.LongString()
 
 	// Using MD5 is overkill, but reduces accidental collisions.
 	h := md5.Sum([]byte(p))
 	return binary.LittleEndian.Uint32(h[:4])
-}
-
-// ptrto returns the Type *t.
-// The returned struct must not be modified.
-func ptrto(t *Type) *Type {
-	if Tptr == 0 {
-		Fatalf("ptrto: no tptr")
-	}
-	if t == nil {
-		Fatalf("ptrto: nil ptr")
-	}
-	return typPtr(t)
 }
 
 func frame(context int) {
@@ -1157,7 +1181,11 @@ func updateHasCall(n *Node) {
 	}
 
 	switch n.Op {
-	case OLITERAL, ONAME:
+	case OLITERAL, ONAME, OTYPE:
+		if b || n.HasCall() {
+			Fatalf("OLITERAL/ONAME/OTYPE should never have calls: %+v", n)
+		}
+		return
 	case OAS:
 		if needwritebarrier(n.Left) {
 			b = true
@@ -1684,7 +1712,6 @@ func structargs(tl *Type, mustname bool) []*Node {
 //	rcvr - U
 //	method - M func (t T)(), a TFIELD type struct
 //	newnam - the eventual mangled name of this function
-
 func genwrapper(rcvr *Type, method *Field, newnam *Sym, iface int) {
 	if false && Debug['r'] != 0 {
 		fmt.Printf("genwrapper rcvrtype=%v method=%v newnam=%v\n", rcvr, method, newnam)
@@ -1702,13 +1729,13 @@ func genwrapper(rcvr *Type, method *Field, newnam *Sym, iface int) {
 
 	t := nod(OTFUNC, nil, nil)
 	l := []*Node{this}
-	if iface != 0 && rcvr.Width < Types[Tptr].Width {
+	if iface != 0 && rcvr.Width < int64(Widthptr) {
 		// Building method for interface table and receiver
 		// is smaller than the single pointer-sized word
 		// that the interface call will pass in.
 		// Add a dummy padding argument after the
 		// receiver to make up the difference.
-		tpad := typArray(Types[TUINT8], Types[Tptr].Width-rcvr.Width)
+		tpad := typArray(Types[TUINT8], int64(Widthptr)-rcvr.Width)
 		pad := nod(ODCLFIELD, newname(lookup(".pad")), typenod(tpad))
 		l = append(l, pad)
 	}
@@ -1717,9 +1744,11 @@ func genwrapper(rcvr *Type, method *Field, newnam *Sym, iface int) {
 	t.Rlist.Set(out)
 
 	fn := nod(ODCLFUNC, nil, nil)
+	fn.Func.SetDupok(true)
 	fn.Func.Nname = newname(newnam)
 	fn.Func.Nname.Name.Defn = fn
 	fn.Func.Nname.Name.Param.Ntype = t
+	fn.Func.Nname.Sym.SetExported(true) // prevent export; see closure.go
 	declare(fn.Func.Nname, PFUNC)
 	funchdr(fn)
 
@@ -1753,7 +1782,7 @@ func genwrapper(rcvr *Type, method *Field, newnam *Sym, iface int) {
 	// the TOC to the appropriate value for that module. But if it returns
 	// directly to the wrapper's caller, nothing will reset it to the correct
 	// value for that function.
-	if !instrumenting && rcvr.IsPtr() && methodrcvr.IsPtr() && method.Embedded != 0 && !isifacemethod(method.Type) && !(Thearch.LinkArch.Name == "ppc64le" && Ctxt.Flag_dynlink) {
+	if !instrumenting && rcvr.IsPtr() && methodrcvr.IsPtr() && method.Embedded != 0 && !isifacemethod(method.Type) && !(thearch.LinkArch.Name == "ppc64le" && Ctxt.Flag_dynlink) {
 		// generate tail call: adjust pointer receiver and jump to embedded method.
 		dot = dot.Left // skip final .M
 		// TODO(mdempsky): Remove dependency on dotlist.
@@ -1813,7 +1842,7 @@ func hashmem(t *Type) *Node {
 	n := newname(sym)
 	n.Class = PFUNC
 	tfn := nod(OTFUNC, nil, nil)
-	tfn.List.Append(nod(ODCLFIELD, nil, typenod(ptrto(t))))
+	tfn.List.Append(nod(ODCLFIELD, nil, typenod(typPtr(t))))
 	tfn.List.Append(nod(ODCLFIELD, nil, typenod(Types[TUINTPTR])))
 	tfn.List.Append(nod(ODCLFIELD, nil, typenod(Types[TUINTPTR])))
 	tfn.Rlist.Append(nod(ODCLFIELD, nil, typenod(Types[TUINTPTR])))
@@ -1923,6 +1952,14 @@ func implements(t, iface *Type, m, samename **Field, ptr *int) bool {
 		}
 	}
 
+	// We're going to emit an OCONVIFACE.
+	// Call itabname so that (t, iface)
+	// gets added to itabs early, which allows
+	// us to de-virtualize calls through this
+	// type/interface pair later. See peekitabs in reflect.go
+	if isdirectiface(t0) && !iface.IsEmptyInterface() {
+		itabname(t0, iface)
+	}
 	return true
 }
 
@@ -2102,7 +2139,7 @@ func isdirectiface(t *Type) bool {
 // itabType loads the _type field from a runtime.itab struct.
 func itabType(itab *Node) *Node {
 	typ := nodSym(ODOTPTR, itab, nil)
-	typ.Type = ptrto(Types[TUINT8])
+	typ.Type = typPtr(Types[TUINT8])
 	typ.Typecheck = 1
 	typ.Xoffset = int64(Widthptr) // offset of _type in runtime.itab
 	typ.SetBounded(true)          // guaranteed not to fault
@@ -2119,7 +2156,7 @@ func ifaceData(n *Node, t *Type) *Node {
 		ptr.Typecheck = 1
 		return ptr
 	}
-	ptr.Type = ptrto(t)
+	ptr.Type = typPtr(t)
 	ptr.SetBounded(true)
 	ptr.Typecheck = 1
 	ind := nod(OIND, ptr, nil)

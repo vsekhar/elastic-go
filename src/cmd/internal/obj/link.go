@@ -169,8 +169,6 @@ type Addr struct {
 	//	for TYPE_BRANCH, a *Prog (optional)
 	//	for TYPE_TEXTSIZE, an int32 (optional)
 	Val interface{}
-
-	Node interface{} // for use by compiler
 }
 
 type AddrName int8
@@ -231,29 +229,27 @@ const (
 // The other fields not yet mentioned are for use by the back ends and should
 // be left zeroed by creators of Prog lists.
 type Prog struct {
-	Ctxt   *Link       // linker context
-	Link   *Prog       // next Prog in linked list
-	From   Addr        // first source operand
-	From3  *Addr       // third source operand (second is Reg below)
-	To     Addr        // destination operand (second is RegTo2 below)
-	Pcond  *Prog       // target of conditional jump
-	Opt    interface{} // available to optimization passes to hold per-Prog state
-	Forwd  *Prog       // for x86 back end
-	Rel    *Prog       // for x86, arm back ends
-	Pc     int64       // for back ends or assembler: virtual or actual program counter, depending on phase
-	Pos    src.XPos    // source position of this instruction
-	Spadj  int32       // effect of instruction on stack pointer (increment or decrement amount)
-	As     As          // assembler opcode
-	Reg    int16       // 2nd source operand
-	RegTo2 int16       // 2nd destination operand
-	Mark   uint16      // bitmask of arch-specific items
-	Optab  uint16      // arch-specific opcode index
-	Scond  uint8       // condition bits for conditional instruction (e.g., on ARM)
-	Back   uint8       // for x86 back end: backwards branch state
-	Ft     uint8       // for x86 back end: type index of Prog.From
-	Tt     uint8       // for x86 back end: type index of Prog.To
-	Isize  uint8       // for x86 back end: size of the instruction in bytes
-	Mode   int8        // for x86 back end: 32- or 64-bit mode
+	Ctxt   *Link    // linker context
+	Link   *Prog    // next Prog in linked list
+	From   Addr     // first source operand
+	From3  *Addr    // third source operand (second is Reg below)
+	To     Addr     // destination operand (second is RegTo2 below)
+	Pcond  *Prog    // target of conditional jump
+	Forwd  *Prog    // for x86 back end
+	Rel    *Prog    // for x86, arm back ends
+	Pc     int64    // for back ends or assembler: virtual or actual program counter, depending on phase
+	Pos    src.XPos // source position of this instruction
+	Spadj  int32    // effect of instruction on stack pointer (increment or decrement amount)
+	As     As       // assembler opcode
+	Reg    int16    // 2nd source operand
+	RegTo2 int16    // 2nd destination operand
+	Mark   uint16   // bitmask of arch-specific items
+	Optab  uint16   // arch-specific opcode index
+	Scond  uint8    // condition bits for conditional instruction (e.g., on ARM)
+	Back   uint8    // for x86 back end: backwards branch state
+	Ft     uint8    // for x86 back end: type index of Prog.From
+	Tt     uint8    // for x86 back end: type index of Prog.To
+	Isize  uint8    // for x86 back end: size of the instruction in bytes
 }
 
 // From3Type returns From3.Type, or TYPE_NONE when From3 is nil.
@@ -293,9 +289,6 @@ const (
 	ARET
 	ATEXT
 	AUNDEF
-	AVARDEF
-	AVARKILL
-	AVARLIVE
 	A_ARCHSPECIFIC
 )
 
@@ -719,9 +712,9 @@ type Pcdata struct {
 type Link struct {
 	Headtype      HeadType
 	Arch          *LinkArch
-	Debugasm      int32
-	Debugvlog     int32
-	Debugdivmod   int32
+	Debugasm      bool
+	Debugvlog     bool
+	Debugdivmod   bool
 	Debugpcln     string
 	Flag_shared   bool
 	Flag_dynlink  bool
@@ -741,20 +734,12 @@ type Link struct {
 	Printp        *Prog
 	Blitrl        *Prog
 	Elitrl        *Prog
-	Rexflag       int
-	Vexflag       int
-	Rep           int
-	Repn          int
-	Lock          int
-	Asmode        int
-	AsmBuf        AsmBuf // instruction buffer for x86
 	Instoffset    int64
 	Autosize      int32
 	Armsize       int32
 	Pc            int64
 	DiagFunc      func(string, ...interface{})
-	DebugInfo     func(fn *LSym) []*dwarf.Var
-	Mode          int
+	DebugInfo     func(fn *LSym, curfn interface{}) []*dwarf.Var // if non-nil, curfn is a *gc.Node
 	Cursym        *LSym
 	Version       int
 	Errors        int
@@ -886,96 +871,3 @@ func (h *HeadType) String() string {
 	}
 	return fmt.Sprintf("HeadType(%d)", *h)
 }
-
-// AsmBuf is a simple buffer to assemble variable-length x86 instructions into.
-type AsmBuf struct {
-	buf [100]byte
-	off int
-}
-
-// Put1 appends one byte to the end of the buffer.
-func (a *AsmBuf) Put1(x byte) {
-	a.buf[a.off] = x
-	a.off++
-}
-
-// Put2 appends two bytes to the end of the buffer.
-func (a *AsmBuf) Put2(x, y byte) {
-	a.buf[a.off+0] = x
-	a.buf[a.off+1] = y
-	a.off += 2
-}
-
-// Put3 appends three bytes to the end of the buffer.
-func (a *AsmBuf) Put3(x, y, z byte) {
-	a.buf[a.off+0] = x
-	a.buf[a.off+1] = y
-	a.buf[a.off+2] = z
-	a.off += 3
-}
-
-// Put4 appends four bytes to the end of the buffer.
-func (a *AsmBuf) Put4(x, y, z, w byte) {
-	a.buf[a.off+0] = x
-	a.buf[a.off+1] = y
-	a.buf[a.off+2] = z
-	a.buf[a.off+3] = w
-	a.off += 4
-}
-
-// PutInt16 writes v into the buffer using little-endian encoding.
-func (a *AsmBuf) PutInt16(v int16) {
-	a.buf[a.off+0] = byte(v)
-	a.buf[a.off+1] = byte(v >> 8)
-	a.off += 2
-}
-
-// PutInt32 writes v into the buffer using little-endian encoding.
-func (a *AsmBuf) PutInt32(v int32) {
-	a.buf[a.off+0] = byte(v)
-	a.buf[a.off+1] = byte(v >> 8)
-	a.buf[a.off+2] = byte(v >> 16)
-	a.buf[a.off+3] = byte(v >> 24)
-	a.off += 4
-}
-
-// PutInt64 writes v into the buffer using little-endian encoding.
-func (a *AsmBuf) PutInt64(v int64) {
-	a.buf[a.off+0] = byte(v)
-	a.buf[a.off+1] = byte(v >> 8)
-	a.buf[a.off+2] = byte(v >> 16)
-	a.buf[a.off+3] = byte(v >> 24)
-	a.buf[a.off+4] = byte(v >> 32)
-	a.buf[a.off+5] = byte(v >> 40)
-	a.buf[a.off+6] = byte(v >> 48)
-	a.buf[a.off+7] = byte(v >> 56)
-	a.off += 8
-}
-
-// Put copies b into the buffer.
-func (a *AsmBuf) Put(b []byte) {
-	copy(a.buf[a.off:], b)
-	a.off += len(b)
-}
-
-// Insert inserts b at offset i.
-func (a *AsmBuf) Insert(i int, b byte) {
-	a.off++
-	copy(a.buf[i+1:a.off], a.buf[i:a.off-1])
-	a.buf[i] = b
-}
-
-// Last returns the byte at the end of the buffer.
-func (a *AsmBuf) Last() byte { return a.buf[a.off-1] }
-
-// Len returns the length of the buffer.
-func (a *AsmBuf) Len() int { return a.off }
-
-// Bytes returns the contents of the buffer.
-func (a *AsmBuf) Bytes() []byte { return a.buf[:a.off] }
-
-// Reset empties the buffer.
-func (a *AsmBuf) Reset() { a.off = 0 }
-
-// Peek returns the byte at offset i.
-func (a *AsmBuf) Peek(i int) byte { return a.buf[i] }

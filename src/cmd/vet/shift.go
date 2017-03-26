@@ -48,28 +48,6 @@ func checkLongShift(f *File, node ast.Node, x, y ast.Expr) {
 		return
 	}
 
-	// Ignore shifts where the shift amount is calculated using unsafe.
-	// These are used for bit-twiddling tricks.
-	var hasUnsafe bool
-	ast.Inspect(y, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		pkg, ok := sel.X.(*ast.Ident)
-		if !ok {
-			return true
-		}
-		if pkg.Name == "unsafe" {
-			hasUnsafe = true
-			return false
-		}
-		return true
-	})
-	if hasUnsafe {
-		return
-	}
-
 	v := f.pkg.types[y].Value
 	if v == nil {
 		return
@@ -87,7 +65,6 @@ func checkLongShift(f *File, node ast.Node, x, y ast.Expr) {
 		return
 	}
 	var size int64
-	var msg string
 	switch b.Kind() {
 	case types.Uint8, types.Int8:
 		size = 8
@@ -97,15 +74,20 @@ func checkLongShift(f *File, node ast.Node, x, y ast.Expr) {
 		size = 32
 	case types.Uint64, types.Int64:
 		size = 64
-	case types.Int, types.Uint, types.Uintptr:
-		// These types may be as small as 32 bits, but no smaller.
-		size = 32
-		msg = "might be "
+	case types.Int, types.Uint:
+		size = uintBitSize
+	case types.Uintptr:
+		size = uintptrBitSize
 	default:
 		return
 	}
 	if amt >= size {
 		ident := f.gofmt(x)
-		f.Badf(node.Pos(), "%s %stoo small for shift of %d", ident, msg, amt)
+		f.Badf(node.Pos(), "%s (%d bits) too small for shift of %d", ident, size, amt)
 	}
 }
+
+var (
+	uintBitSize    = 8 * archSizes.Sizeof(types.Typ[types.Uint])
+	uintptrBitSize = 8 * archSizes.Sizeof(types.Typ[types.Uintptr])
+)

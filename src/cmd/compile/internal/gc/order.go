@@ -206,16 +206,15 @@ func orderaddrtemp(n *Node, order *Order) *Node {
 	return ordercopyexpr(n, n.Type, order, 0)
 }
 
-// ordermapkeytemp prepares n.Right to be a key in a map lookup.
-func ordermapkeytemp(n *Node, order *Order) {
+// ordermapkeytemp prepares n to be a key in a map runtime call and returns n.
+// It should only be used for map runtime calls which have *_fast* versions.
+func ordermapkeytemp(t *Type, n *Node, order *Order) *Node {
 	// Most map calls need to take the address of the key.
-	// Exception: mapaccessN_fast* calls. See golang.org/issue/19015.
-	p, _ := mapaccessfast(n.Left.Type)
-	fastaccess := p != "" && n.Etype == 0 // Etype == 0 iff n is an rvalue
-	if fastaccess {
-		return
+	// Exception: map*_fast* calls. See golang.org/issue/19015.
+	if mapfast(t) == mapslow {
+		return orderaddrtemp(n, order)
 	}
-	n.Right = orderaddrtemp(n.Right, order)
+	return n
 }
 
 type ordermarker int
@@ -553,7 +552,7 @@ func orderstmt(n *Node, order *Order) {
 		if r.Right.Op == OARRAYBYTESTR {
 			r.Right.Op = OARRAYBYTESTRTMP
 		}
-		ordermapkeytemp(r, order)
+		r.Right = ordermapkeytemp(r.Left.Type, r.Right, order)
 		orderokas2(n, order)
 		cleantemp(t, order)
 
@@ -633,10 +632,12 @@ func orderstmt(n *Node, order *Order) {
 		case ODELETE:
 			orderexprlist(n.Left.List, order)
 
-			t1 := marktemp(order)
-			np := n.Left.List.Addr(1) // map key
-			*np = ordercopyexpr(*np, (*np).Type, order, 0)
-			poptemp(t1, order)
+			if mapfast(n.Left.List.First().Type) == mapslow {
+				t1 := marktemp(order)
+				np := n.Left.List.Addr(1) // map key
+				*np = ordercopyexpr(*np, (*np).Type, order, 0)
+				poptemp(t1, order)
+			}
 
 		default:
 			ordercall(n.Left, order)
@@ -649,7 +650,7 @@ func orderstmt(n *Node, order *Order) {
 		t := marktemp(order)
 		n.List.SetFirst(orderexpr(n.List.First(), order, nil))
 		n.List.SetSecond(orderexpr(n.List.Second(), order, nil))
-		n.List.SetSecond(orderaddrtemp(n.List.Second(), order)) // map key
+		n.List.SetSecond(ordermapkeytemp(n.List.First().Type, n.List.Second(), order))
 		order.out = append(order.out, n)
 		cleantemp(t, order)
 
@@ -792,8 +793,8 @@ func orderstmt(n *Node, order *Order) {
 			if r != nil {
 				switch r.Op {
 				default:
-					yyerror("unknown op in select %v", r.Op)
 					Dump("select case", r)
+					Fatalf("unknown op in select %v", r.Op)
 
 				// If this is case x := <-ch or case x, y := <-ch, the case has
 				// the ODCL nodes to declare x and y. We want to delay that
@@ -814,8 +815,8 @@ func orderstmt(n *Node, order *Order) {
 					}
 
 					if r.Ninit.Len() != 0 {
-						yyerror("ninit on select recv")
 						dumplist("ninit", r.Ninit)
+						Fatalf("ninit on select recv")
 					}
 
 					// case x = <-c
@@ -876,8 +877,8 @@ func orderstmt(n *Node, order *Order) {
 
 				case OSEND:
 					if r.Ninit.Len() != 0 {
-						yyerror("ninit on select send")
 						dumplist("ninit", r.Ninit)
+						Fatalf("ninit on select send")
 					}
 
 					// case c <- x
@@ -915,7 +916,13 @@ func orderstmt(n *Node, order *Order) {
 
 		n.Left = orderexpr(n.Left, order, nil)
 		n.Right = orderexpr(n.Right, order, nil)
-		n.Right = orderaddrtemp(n.Right, order)
+		if instrumenting {
+			// Force copying to the stack so that (chan T)(nil) <- x
+			// is still instrumented as a read of x.
+			n.Right = ordercopyexpr(n.Right, n.Right.Type, order, 0)
+		} else {
+			n.Right = orderaddrtemp(n.Right, order)
+		}
 		order.out = append(order.out, n)
 		cleantemp(t, order)
 
@@ -1062,7 +1069,7 @@ func orderexpr(n *Node, order *Order, lhs *Node) *Node {
 			needCopy = true
 		}
 
-		ordermapkeytemp(n, order)
+		n.Right = ordermapkeytemp(n.Left.Type, n.Right, order)
 		if needCopy {
 			n = ordercopyexpr(n, n.Type, order, 0)
 		}

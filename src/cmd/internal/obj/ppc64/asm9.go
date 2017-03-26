@@ -597,7 +597,7 @@ func span9(ctxt *obj.Link, cursym *obj.LSym) {
 	var otxt int64
 	var q *obj.Prog
 	for bflag != 0 {
-		if ctxt.Debugvlog != 0 {
+		if ctxt.Debugvlog {
 			ctxt.Logf("%5.2f span1\n", obj.Cputime())
 		}
 		bflag = 0
@@ -2765,7 +2765,7 @@ func asmout(ctxt *obj.Link, p *obj.Prog, o *Optab, out []uint32) {
 		}
 		o1 = AOP_RRR(oprrr(ctxt, p.As), uint32(p.To.Reg), 0, uint32(r))
 
-	case 34: /* FMADDx fra,frb,frc,frd (d=a*b+c); FSELx a<0? (d=b): (d=c) */
+	case 34: /* FMADDx fra,frb,frc,frt (t=a*c±b) */
 		o1 = AOP_RRR(oprrr(ctxt, p.As), uint32(p.To.Reg), uint32(p.From.Reg), uint32(p.Reg)) | (uint32(p.From3.Reg)&31)<<6
 
 	case 35: /* mov r,lext/lauto/loreg ==> cau $(v>>16),sb,r'; store o(r') */

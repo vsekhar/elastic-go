@@ -16,6 +16,15 @@ import (
 type itabEntry struct {
 	t, itype *Type
 	sym      *Sym
+
+	// symbol of the itab itself;
+	// filled in lazily after typecheck
+	lsym *obj.LSym
+
+	// symbols of each method in
+	// the itab, sorted by byte offset;
+	// filled in at the same time as lsym
+	entries []*obj.LSym
 }
 
 type ptabEntry struct {
@@ -102,10 +111,10 @@ func mapbucket(t *Type) *Type {
 	dowidth(keytype)
 	dowidth(valtype)
 	if keytype.Width > MAXKEYSIZE {
-		keytype = ptrto(keytype)
+		keytype = typPtr(keytype)
 	}
 	if valtype.Width > MAXVALSIZE {
-		valtype = ptrto(valtype)
+		valtype = typPtr(valtype)
 	}
 
 	field := make([]*Field, 0, 5)
@@ -149,7 +158,7 @@ func mapbucket(t *Type) *Type {
 	// Arrange for the bucket to have no pointers by changing
 	// the type of the overflow field to uintptr in this case.
 	// See comment on hmap.overflow in ../../../../runtime/hashmap.go.
-	otyp := ptrto(bucket)
+	otyp := typPtr(bucket)
 	if !haspointers(t.Val()) && !haspointers(t.Key()) && t.Val().Width <= MAXVALSIZE && t.Key().Width <= MAXKEYSIZE {
 		otyp = Types[TUINTPTR]
 	}
@@ -165,7 +174,7 @@ func mapbucket(t *Type) *Type {
 	// Double-check that overflow field is final memory in struct,
 	// with no padding at end. See comment above.
 	if ovf.Offset != bucket.Width-int64(Widthptr) {
-		yyerror("bad math in mapbucket for %v", t)
+		Fatalf("bad math in mapbucket for %v", t)
 	}
 
 	t.MapType().Bucket = bucket
@@ -188,8 +197,8 @@ func hmap(t *Type) *Type {
 		makefield("B", Types[TUINT8]),
 		makefield("noverflow", Types[TUINT16]),
 		makefield("hash0", Types[TUINT32]),
-		makefield("buckets", ptrto(bucket)),
-		makefield("oldbuckets", ptrto(bucket)),
+		makefield("buckets", typPtr(bucket)),
+		makefield("oldbuckets", typPtr(bucket)),
 		makefield("nevacuate", Types[TUINTPTR]),
 		makefield("overflow", Types[TUNSAFEPTR]),
 	}
@@ -226,12 +235,12 @@ func hiter(t *Type) *Type {
 	// }
 	// must match ../../../../runtime/hashmap.go:hiter.
 	var field [12]*Field
-	field[0] = makefield("key", ptrto(t.Key()))
-	field[1] = makefield("val", ptrto(t.Val()))
-	field[2] = makefield("t", ptrto(Types[TUINT8]))
-	field[3] = makefield("h", ptrto(hmap(t)))
-	field[4] = makefield("buckets", ptrto(mapbucket(t)))
-	field[5] = makefield("bptr", ptrto(mapbucket(t)))
+	field[0] = makefield("key", typPtr(t.Key()))
+	field[1] = makefield("val", typPtr(t.Val()))
+	field[2] = makefield("t", typPtr(Types[TUINT8]))
+	field[3] = makefield("h", typPtr(hmap(t)))
+	field[4] = makefield("buckets", typPtr(mapbucket(t)))
+	field[5] = makefield("bptr", typPtr(mapbucket(t)))
 	field[6] = makefield("overflow0", Types[TUNSAFEPTR])
 	field[7] = makefield("overflow1", Types[TUNSAFEPTR])
 	field[8] = makefield("startBucket", Types[TUINTPTR])
@@ -245,7 +254,7 @@ func hiter(t *Type) *Type {
 	i.SetFields(field[:])
 	dowidth(i)
 	if i.Width != int64(12*Widthptr) {
-		yyerror("hash_iter size not correct %d %d", i.Width, 12*Widthptr)
+		Fatalf("hash_iter size not correct %d %d", i.Width, 12*Widthptr)
 	}
 	t.MapType().Hiter = i
 	i.StructType().Map = t
@@ -301,7 +310,7 @@ func methods(t *Type) []*Sig {
 	it := t
 
 	if !isdirectiface(it) {
-		it = ptrto(t)
+		it = typPtr(t)
 	}
 
 	// make list of methods for t,
@@ -354,7 +363,7 @@ func methods(t *Type) []*Sig {
 
 		if !sig.isym.Siggen() {
 			sig.isym.SetSiggen(true)
-			if !eqtype(this, it) || this.Width < Types[Tptr].Width {
+			if !eqtype(this, it) || this.Width < int64(Widthptr) {
 				compiling_wrappers = 1
 				genwrapper(it, f, sig.isym, 1)
 				compiling_wrappers = 0
@@ -415,7 +424,6 @@ func imethods(t *Type) []*Sig {
 		// Generate the method body, so that compiled
 		// code can refer to it.
 		isym := methodsym(method, t, 0)
-
 		if !isym.Siggen() {
 			isym.SetSiggen(true)
 			genwrapper(t, f, isym, 0)
@@ -837,7 +845,7 @@ func dcommontype(s *Sym, ot int, t *Type) int {
 	sptrWeak := true
 	var sptr *Sym
 	if !t.IsPtr() || t.ptrTo != nil {
-		tptr := ptrto(t)
+		tptr := typPtr(t)
 		if t.Sym != nil || methods(tptr) != nil {
 			sptrWeak = false
 		}
@@ -875,7 +883,7 @@ func dcommontype(s *Sym, ot int, t *Type) int {
 	}
 
 	exported := false
-	p := t.tconv(FmtLeft | FmtUnsigned)
+	p := t.LongString()
 	// If we're writing out type T,
 	// we are very likely to write out type *T as well.
 	// Use the string "*T"[1:] for "T", so that the two
@@ -940,7 +948,7 @@ func dcommontype(s *Sym, ot int, t *Type) int {
 }
 
 func typesym(t *Type) *Sym {
-	name := t.tconv(FmtLeft)
+	name := t.ShortString()
 
 	// Use a separate symbol name for Noalg types for #17752.
 	if a, bad := algtype1(t); a == ANOEQ && bad.Noalg() {
@@ -953,11 +961,11 @@ func typesym(t *Type) *Sym {
 // tracksym returns the symbol for tracking use of field/method f, assumed
 // to be a member of struct/interface type t.
 func tracksym(t *Type, f *Field) *Sym {
-	return Pkglookup(t.tconv(FmtLeft)+"."+f.Sym.Name, trackpkg)
+	return Pkglookup(t.ShortString()+"."+f.Sym.Name, trackpkg)
 }
 
 func typesymprefix(prefix string, t *Type) *Sym {
-	p := prefix + "." + t.tconv(FmtLeft)
+	p := prefix + "." + t.ShortString()
 	s := Pkglookup(p, typepkg)
 
 	//print("algsym: %s -> %+S\n", p, s);
@@ -986,7 +994,7 @@ func typenamesym(t *Type) *Sym {
 func typename(t *Type) *Node {
 	s := typenamesym(t)
 	n := nod(OADDR, s.Def, nil)
-	n.Type = ptrto(s.Def.Type)
+	n.Type = typPtr(s.Def.Type)
 	n.SetAddable(true)
 	n.Typecheck = 1
 	return n
@@ -996,7 +1004,7 @@ func itabname(t, itype *Type) *Node {
 	if t == nil || (t.IsPtr() && t.Elem() == nil) || t.IsUntyped() || !itype.IsInterface() || itype.IsEmptyInterface() {
 		Fatalf("itabname(%v, %v)", t, itype)
 	}
-	s := Pkglookup(t.tconv(FmtLeft)+","+itype.tconv(FmtLeft), itabpkg)
+	s := Pkglookup(t.ShortString()+","+itype.ShortString(), itabpkg)
 	if s.Def == nil {
 		n := newname(s)
 		n.Type = Types[TUINT8]
@@ -1008,7 +1016,7 @@ func itabname(t, itype *Type) *Node {
 	}
 
 	n := nod(OADDR, s.Def, nil)
-	n.Type = ptrto(s.Def.Type)
+	n.Type = typPtr(s.Def.Type)
 	n.SetAddable(true)
 	n.Typecheck = 1
 	return n
@@ -1379,6 +1387,78 @@ ok:
 	return s
 }
 
+// for each itabEntry, gather the methods on
+// the concrete type that implement the interface
+func peekitabs() {
+	for i := range itabs {
+		tab := &itabs[i]
+		methods := genfun(tab.t, tab.itype)
+		if len(methods) == 0 {
+			continue
+		}
+		tab.lsym = Linksym(tab.sym)
+		tab.entries = methods
+	}
+}
+
+// for the given concrete type and interface
+// type, return the (sorted) set of methods
+// on the concrete type that implement the interface
+func genfun(t, it *Type) []*obj.LSym {
+	if t == nil || it == nil {
+		return nil
+	}
+	sigs := imethods(it)
+	methods := methods(t)
+	out := make([]*obj.LSym, 0, len(sigs))
+	if len(sigs) == 0 {
+		return nil
+	}
+
+	// both sigs and methods are sorted by name,
+	// so we can find the intersect in a single pass
+	for _, m := range methods {
+		if m.name == sigs[0].name {
+			out = append(out, Linksym(m.isym))
+			sigs = sigs[1:]
+			if len(sigs) == 0 {
+				break
+			}
+		}
+	}
+
+	return out
+}
+
+// itabsym uses the information gathered in
+// peekitabs to de-virtualize interface methods.
+// Since this is called by the SSA backend, it shouldn't
+// generate additional Nodes, Syms, etc.
+func itabsym(it *obj.LSym, offset int64) *obj.LSym {
+	var syms []*obj.LSym
+	if it == nil {
+		return nil
+	}
+
+	for i := range itabs {
+		e := &itabs[i]
+		if e.lsym == it {
+			syms = e.entries
+			break
+		}
+	}
+	if syms == nil {
+		return nil
+	}
+
+	// keep this arithmetic in sync with *itab layout
+	methodnum := int((offset - 3*int64(Widthptr) - 8) / int64(Widthptr))
+	if methodnum >= len(syms) {
+		return nil
+	}
+	return syms[methodnum]
+}
+
 func dumptypestructs() {
 	// copy types from externdcl list to signatlist
 	for _, n := range externdcl {
@@ -1393,7 +1473,7 @@ func dumptypestructs() {
 		t := signatlist[i]
 		dtypesym(t)
 		if t.Sym != nil {
-			dtypesym(ptrto(t))
+			dtypesym(typPtr(t))
 		}
 	}
 
@@ -1420,7 +1500,7 @@ func dumptypestructs() {
 		// method functions. None are allocated on heap, so we can use obj.NOPTR.
 		ggloblsym(i.sym, int32(o), int16(obj.DUPOK|obj.NOPTR))
 
-		ilink := Pkglookup(i.t.tconv(FmtLeft)+","+i.itype.tconv(FmtLeft), itablinkpkg)
+		ilink := Pkglookup(i.t.ShortString()+","+i.itype.ShortString(), itablinkpkg)
 		dsymptr(ilink, 0, i.sym, 0)
 		ggloblsym(ilink, int32(Widthptr), int16(obj.DUPOK|obj.RODATA))
 	}
@@ -1470,14 +1550,14 @@ func dumptypestructs() {
 	// but using runtime means fewer copies in .6 files.
 	if myimportpath == "runtime" {
 		for i := EType(1); i <= TBOOL; i++ {
-			dtypesym(ptrto(Types[i]))
+			dtypesym(typPtr(Types[i]))
 		}
-		dtypesym(ptrto(Types[TSTRING]))
-		dtypesym(ptrto(Types[TUNSAFEPTR]))
+		dtypesym(typPtr(Types[TSTRING]))
+		dtypesym(typPtr(Types[TUNSAFEPTR]))
 
 		// emit type structs for error and func(error) string.
 		// The latter is the type of an auto-generated wrapper.
-		dtypesym(ptrto(errortype))
+		dtypesym(typPtr(errortype))
 
 		dtypesym(functype(nil, []*Node{nod(ODCLFIELD, nil, typenod(errortype))}, []*Node{nod(ODCLFIELD, nil, typenod(Types[TSTRING]))}))
 
@@ -1781,7 +1861,7 @@ func zeroaddr(size int64) *Node {
 		s.Def = x
 	}
 	z := nod(OADDR, s.Def, nil)
-	z.Type = ptrto(Types[TUINT8])
+	z.Type = typPtr(Types[TUINT8])
 	z.SetAddable(true)
 	z.Typecheck = 1
 	return z

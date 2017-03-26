@@ -4,6 +4,10 @@
 
 package gc
 
+import (
+	"sort"
+)
+
 // machine size and rounding alignment is dictated around
 // the size of a pointer, set in betypeinit (see ../amd64/galign.go).
 var defercalc int
@@ -15,12 +19,53 @@ func Rnd(o int64, r int64) int64 {
 	return (o + r - 1) &^ (r - 1)
 }
 
+// expandiface computes the method set for interface type t by
+// expanding embedded interfaces.
+func expandiface(t *Type) {
+	var fields []*Field
+	for _, m := range t.Methods().Slice() {
+		if m.Sym != nil {
+			fields = append(fields, m)
+			continue
+		}
+
+		if !m.Type.IsInterface() {
+			yyerrorl(m.Nname.Pos, "interface contains embedded non-interface %v", m.Type)
+			m.SetBroke(true)
+			t.SetBroke(true)
+			// Add to fields so that error messages
+			// include the broken embedded type when
+			// printing t.
+			// TODO(mdempsky): Revisit this.
+			fields = append(fields, m)
+			continue
+		}
+
+		// Embedded interface: duplicate all methods
+		// (including broken ones, if any) and add to t's
+		// method set.
+		for _, t1 := range m.Type.Fields().Slice() {
+			f := newField()
+			f.Type = t1.Type
+			f.SetBroke(t1.Broke())
+			f.Sym = t1.Sym
+			f.Nname = m.Nname // preserve embedding position
+			fields = append(fields, f)
+		}
+	}
+	sort.Sort(methcmp(fields))
+
+	// Access fields directly to avoid recursively calling dowidth
+	// within Type.Fields().
+	t.Extra.(*InterType).fields.Set(fields)
+}
+
 func offmod(t *Type) {
 	o := int32(0)
 	for _, f := range t.Fields().Slice() {
 		f.Offset = int64(o)
 		o += int32(Widthptr)
-		if int64(o) >= Thearch.MAXWIDTH {
+		if int64(o) >= thearch.MAXWIDTH {
 			yyerror("interface too large")
 			o = int32(Widthptr)
 		}
@@ -34,7 +79,6 @@ func widstruct(errtype *Type, t *Type, o int64, flag int) int64 {
 		maxalign = 1
 	}
 	lastzero := int64(0)
-	var w int64
 	for _, f := range t.Fields().Slice() {
 		if f.Type == nil {
 			// broken field, just skip it so that other valid fields
@@ -46,10 +90,6 @@ func widstruct(errtype *Type, t *Type, o int64, flag int) int64 {
 		if int32(f.Type.Align) > maxalign {
 			maxalign = int32(f.Type.Align)
 		}
-		if f.Type.Width < 0 {
-			Fatalf("invalid width %d", f.Type.Width)
-		}
-		w = f.Type.Width
 		if f.Type.Align > 0 {
 			o = Rnd(o, int64(f.Type.Align))
 		}
@@ -70,11 +110,15 @@ func widstruct(errtype *Type, t *Type, o int64, flag int) int64 {
 			}
 		}
 
+		w := f.Type.Width
+		if w < 0 {
+			Fatalf("invalid width %d", f.Type.Width)
+		}
 		if w == 0 {
 			lastzero = o
 		}
 		o += w
-		maxwidth := Thearch.MAXWIDTH
+		maxwidth := thearch.MAXWIDTH
 		// On 32-bit systems, reflect tables impose an additional constraint
 		// that each field start offset must fit in 31 bits.
 		if maxwidth < 1<<32 {
@@ -126,7 +170,7 @@ func dowidth(t *Type) {
 	if t.Width == -2 {
 		if !t.Broke() {
 			t.SetBroke(true)
-			yyerrorl(t.Pos, "invalid recursive type %v", t)
+			yyerrorl(t.nod.Pos, "invalid recursive type %v", t)
 		}
 
 		t.Width = 0
@@ -143,7 +187,10 @@ func dowidth(t *Type) {
 	defercalc++
 
 	lno := lineno
-	lineno = t.Pos
+	if t.nod != nil {
+		lineno = t.nod.Pos
+	}
+
 	t.Width = -2
 	t.Align = 0
 
@@ -200,9 +247,8 @@ func dowidth(t *Type) {
 
 	case TINTER: // implemented as 2 pointers
 		w = 2 * int64(Widthptr)
-
 		t.Align = uint8(Widthptr)
-		offmod(t)
+		expandiface(t)
 
 	case TCHAN: // implemented as pointer
 		w = int64(Widthptr)
@@ -258,7 +304,7 @@ func dowidth(t *Type) {
 
 		dowidth(t.Elem())
 		if t.Elem().Width != 0 {
-			cap := (uint64(Thearch.MAXWIDTH) - 1) / uint64(t.Elem().Width)
+			cap := (uint64(thearch.MAXWIDTH) - 1) / uint64(t.Elem().Width)
 			if uint64(t.NumElem()) > cap {
 				yyerror("type %L larger than address space", t)
 			}
@@ -311,6 +357,14 @@ func dowidth(t *Type) {
 			Fatalf("invalid alignment for %v", t)
 		}
 		t.Align = uint8(w)
+	}
+
+	if t.Etype == TINTER {
+		// We defer calling these functions until after
+		// setting t.Width and t.Align so the recursive calls
+		// to dowidth within t.Fields() will succeed.
+		checkdupfields("method", t)
+		offmod(t)
 	}
 
 	lineno = lno

@@ -51,15 +51,13 @@ type Sym struct {
 	Pkg        *Pkg
 	Name       string   // object name
 	Def        *Node    // definition: ONAME OTYPE OPACK or OLITERAL
-	Block      int32    // blocknumber to catch redeclaration
 	Lastlineno src.XPos // last declaration for diagnostic
+	Block      int32    // blocknumber to catch redeclaration
 
+	flags   bitset8
 	Label   *Node // corresponding label (ephemeral)
 	Origpkg *Pkg  // original package for . import
 	Lsym    *obj.LSym
-	Fsym    *Sym // funcsym
-
-	flags bitset8
 }
 
 const (
@@ -170,7 +168,7 @@ var Debug_typeassert int
 
 var localpkg *Pkg // package being compiled
 
-var importpkg *Pkg // package being imported
+var inimport bool // set during import
 
 var itabpkg *Pkg // fake pkg for itab entries
 
@@ -243,19 +241,11 @@ var exportlist []*Node
 
 var importlist []*Node // imported functions and methods with inlinable bodies
 
-var funcsyms []*Node
+var funcsyms []*Sym
 
 var dclcontext Class // PEXTERN/PAUTO
 
 var statuniqgen int // name generator for static temps
-
-var Maxarg int64
-
-var Stksize int64 // stack size for current frame
-
-var stkptrsize int64 // prefix of stack containing pointers
-
-var hasdefer bool // flag that curfn has defer statement
 
 var Curfn *Node
 
@@ -297,82 +287,21 @@ var writearchive bool
 
 var Nacl bool
 
-var pc *obj.Prog
-
 var nodfp *Node
 
 var disable_checknil int
 
 // interface to back end
 
-const (
-	// Pseudo-op, like TEXT, GLOBL, TYPE, PCDATA, FUNCDATA.
-	Pseudo = 1 << 1
-
-	// There's nothing to say about the instruction,
-	// but it's still okay to see.
-	OK = 1 << 2
-
-	// Size of right-side write, or right-side read if no write.
-	SizeB = 1 << 3
-	SizeW = 1 << 4
-	SizeL = 1 << 5
-	SizeQ = 1 << 6
-	SizeF = 1 << 7
-	SizeD = 1 << 8
-
-	// Left side (Prog.from): address taken, read, write.
-	LeftAddr  = 1 << 9
-	LeftRead  = 1 << 10
-	LeftWrite = 1 << 11
-
-	// Register in middle (Prog.reg); only ever read. (arm, ppc64)
-	RegRead    = 1 << 12
-	CanRegRead = 1 << 13
-
-	// Right side (Prog.to): address taken, read, write.
-	RightAddr  = 1 << 14
-	RightRead  = 1 << 15
-	RightWrite = 1 << 16
-
-	// Instruction kinds
-	Move  = 1 << 17 // straight move
-	Conv  = 1 << 18 // size conversion
-	Cjmp  = 1 << 19 // conditional jump
-	Break = 1 << 20 // breaks control flow (no fallthrough)
-	Call  = 1 << 21 // function call
-	Jump  = 1 << 22 // jump
-	Skip  = 1 << 23 // data instruction
-
-	// Set, use, or kill of carry bit.
-	// Kill means we never look at the carry bit after this kind of instruction.
-	// Originally for understanding ADC, RCR, and so on, but now also
-	// tracks set, use, and kill of the zero and overflow bits as well.
-	// TODO rename to {Set,Use,Kill}Flags
-	SetCarry  = 1 << 24
-	UseCarry  = 1 << 25
-	KillCarry = 1 << 26
-
-	// Special cases for register use. (amd64, 386)
-	ShiftCX  = 1 << 27 // possible shift by CX
-	ImulAXDX = 1 << 28 // possible multiply into DX:AX
-
-	// Instruction updates whichever of from/to is type D_OREG. (ppc64)
-	PostInc = 1 << 29
-
-	// Optional 3rd input operand, only ever read.
-	From3Read = 1 << 30
-)
-
 type Arch struct {
 	LinkArch *obj.LinkArch
 
 	REGSP    int
 	MAXWIDTH int64
+	Use387   bool // should 386 backend use 387 FP instructions instead of sse2.
 
-	Defframe func(*obj.Prog)
-	Proginfo func(*obj.Prog) ProgInfo
-	Use387   bool // should 8g use 387 FP instructions instead of sse2.
+	Defframe func(*Progs, *Node, int64)
+	Ginsnop  func(*Progs)
 
 	// SSAMarkMoves marks any MOVXconst ops that need to avoid clobbering flags.
 	SSAMarkMoves func(*SSAGenState, *ssa.Block)
@@ -385,9 +314,7 @@ type Arch struct {
 	SSAGenBlock func(s *SSAGenState, b, next *ssa.Block)
 }
 
-var pcloc int32
-
-var Thearch Arch
+var thearch Arch
 
 var (
 	staticbytes,

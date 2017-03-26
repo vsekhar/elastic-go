@@ -492,7 +492,7 @@ OpSwitch:
 		if l.Op == OTYPE {
 			ok |= Etype
 			n.Op = OTYPE
-			n.Type = ptrto(l.Type)
+			n.Type = typPtr(l.Type)
 			n.Left = nil
 			break OpSwitch
 		}
@@ -823,7 +823,7 @@ OpSwitch:
 			n.Type = nil
 			return n
 		}
-		n.Type = ptrto(t)
+		n.Type = typPtr(t)
 		break OpSwitch
 
 	case OCOMPLIT:
@@ -1871,7 +1871,7 @@ OpSwitch:
 		}
 
 		n.Left = l
-		n.Type = ptrto(t)
+		n.Type = typPtr(t)
 		break OpSwitch
 
 	case OPRINT, OPRINTN:
@@ -1933,7 +1933,7 @@ OpSwitch:
 		if !t.IsInterface() {
 			Fatalf("OITAB of %v", t)
 		}
-		n.Type = ptrto(Types[TUINTPTR])
+		n.Type = typPtr(Types[TUINTPTR])
 		break OpSwitch
 
 	case OIDATA:
@@ -1954,9 +1954,9 @@ OpSwitch:
 			Fatalf("OSPTR of %v", t)
 		}
 		if t.IsString() {
-			n.Type = ptrto(Types[TUINT8])
+			n.Type = typPtr(Types[TUINT8])
 		} else {
-			n.Type = ptrto(t.Elem())
+			n.Type = typPtr(t.Elem())
 		}
 		break OpSwitch
 
@@ -2006,6 +2006,13 @@ OpSwitch:
 	case OLABEL:
 		ok |= Etop
 		decldepth++
+		if isblanksym(n.Left.Sym) {
+			// Empty identifier is valid but useless.
+			// Eliminate now to simplify life later.
+			// See issues 7538, 11589, 11593.
+			n.Op = OEMPTY
+			n.Left = nil
+		}
 		break OpSwitch
 
 	case ODEFER:
@@ -2136,7 +2143,7 @@ OpSwitch:
 		}
 	}
 
-	if safemode && importpkg == nil && compiling_wrappers == 0 && t != nil && t.Etype == TUNSAFEPTR {
+	if safemode && !inimport && compiling_wrappers == 0 && t != nil && t.Etype == TUNSAFEPTR {
 		yyerror("cannot use unsafe.Pointer")
 	}
 
@@ -3429,7 +3436,7 @@ func typecheckas2(n *Node) {
 	}
 
 mismatch:
-	yyerror("assignment count mismatch: %d = %d", cl, cr)
+	yyerror("cannot assign %d values to %d variables", cr, cl)
 
 	// second half of dance
 out:
@@ -3465,7 +3472,7 @@ func typecheckfunc(n *Node) {
 		addmethod(n.Func.Shortname, t, true, n.Func.Pragma&Nointerface != 0)
 	}
 
-	if Ctxt.Flag_dynlink && importpkg == nil && n.Func.Nname != nil {
+	if Ctxt.Flag_dynlink && !inimport && n.Func.Nname != nil {
 		makefuncsym(n.Func.Nname.Sym)
 	}
 }
@@ -3564,8 +3571,15 @@ func copytype(n *Node, t *Type) {
 	if n.Name != nil {
 		t.Vargen = n.Name.Vargen
 	}
-	t.methods = Fields{}
-	t.allMethods = Fields{}
+
+	// spec: "The declared type does not inherit any methods bound
+	// to the existing type, but the method set of an interface
+	// type [...] remains unchanged."
+	if !t.IsInterface() {
+		t.methods = Fields{}
+		t.allMethods = Fields{}
+	}
+
 	t.nod = n
 	t.SetDeferwidth(false)
 	t.ptrTo = ptrTo
@@ -3815,6 +3829,7 @@ func typecheckdef(n *Node) *Node {
 		}
 		n.Walkdef = 1
 		n.Type = typ(TFORW)
+		n.Type.nod = n
 		n.Type.Sym = n.Sym // TODO(gri) this also happens in typecheckdeftype(n) - where should it happen?
 		nerrors0 := nerrors
 		typecheckdeftype(n)

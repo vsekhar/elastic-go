@@ -32,10 +32,12 @@ var (
 
 var (
 	Debug_append   int
+	Debug_asm      bool
 	Debug_closure  int
 	debug_dclstack int
 	Debug_panic    int
 	Debug_slice    int
+	Debug_vlog     bool
 	Debug_wb       int
 	Debug_pctab    string
 	Debug_remote   int
@@ -109,12 +111,14 @@ var benchfile string
 // Main parses flags and Go source files specified in the command-line
 // arguments, type-checks the parsed Go package, compiles functions to machine
 // code, and finally writes the compiled package definition to disk.
-func Main() {
+func Main(archInit func(*Arch)) {
 	timings.Start("fe", "init")
 
 	defer hidePanic()
 
-	Ctxt = obj.Linknew(Thearch.LinkArch)
+	archInit(&thearch)
+
+	Ctxt = obj.Linknew(thearch.LinkArch)
 	Ctxt.DebugInfo = debuginfo
 	Ctxt.DiagFunc = yyerror
 	Ctxt.Bso = bufio.NewWriter(os.Stdout)
@@ -168,12 +172,13 @@ func Main() {
 	flag.BoolVar(&compiling_runtime, "+", false, "compiling runtime")
 	obj.Flagcount("%", "debug non-static initializers", &Debug['%'])
 	obj.Flagcount("B", "disable bounds checking", &Debug['B'])
+	obj.Flagcount("C", "disable printing of columns in error messages", &Debug['C']) // TODO(gri) remove eventually
 	flag.StringVar(&localimport, "D", "", "set relative `path` for local imports")
 	obj.Flagcount("E", "debug symbol export", &Debug['E'])
 	obj.Flagfn1("I", "add `directory` to import search path", addidir)
 	obj.Flagcount("K", "debug missing line numbers", &Debug['K'])
 	obj.Flagcount("N", "disable optimizations", &Debug['N'])
-	obj.Flagcount("S", "print assembly listing", &Debug['S'])
+	flag.BoolVar(&Debug_asm, "S", false, "print assembly listing")
 	obj.Flagfn0("V", "print compiler version", doversion)
 	obj.Flagcount("W", "debug parse tree after type checking", &Debug['W'])
 	flag.StringVar(&asmhdr, "asmhdr", "", "write assembly header to `file`")
@@ -203,16 +208,16 @@ func Main() {
 	obj.Flagcount("s", "warn about composite literals that can be simplified", &Debug['s'])
 	flag.StringVar(&pathPrefix, "trimpath", "", "remove `prefix` from recorded source file paths")
 	flag.BoolVar(&safemode, "u", false, "reject unsafe code")
-	obj.Flagcount("v", "increase debug verbosity", &Debug['v'])
+	flag.BoolVar(&Debug_vlog, "v", false, "increase debug verbosity")
 	obj.Flagcount("w", "debug type checking", &Debug['w'])
 	flag.BoolVar(&use_writebarrier, "wb", true, "enable write barrier")
 	var flag_shared bool
 	var flag_dynlink bool
-	if supportsDynlink(Thearch.LinkArch.Arch) {
+	if supportsDynlink(thearch.LinkArch.Arch) {
 		flag.BoolVar(&flag_shared, "shared", false, "generate code that can be linked into a shared library")
 		flag.BoolVar(&flag_dynlink, "dynlink", false, "support references to Go symbols defined in other shared libraries")
 	}
-	if Thearch.LinkArch.Family == sys.AMD64 {
+	if thearch.LinkArch.Family == sys.AMD64 {
 		flag.BoolVar(&flag_largemodel, "largemodel", false, "generate code that assumes a large memory model")
 	}
 	flag.StringVar(&cpuprofile, "cpuprofile", "", "write cpu profile to `file`")
@@ -226,8 +231,8 @@ func Main() {
 	Ctxt.Flag_dynlink = flag_dynlink
 	Ctxt.Flag_optimize = Debug['N'] == 0
 
-	Ctxt.Debugasm = int32(Debug['S'])
-	Ctxt.Debugvlog = int32(Debug['v'])
+	Ctxt.Debugasm = Debug_asm
+	Ctxt.Debugvlog = Debug_vlog
 
 	if flag.NArg() < 1 {
 		usage()
@@ -268,6 +273,7 @@ func Main() {
 	} else if flag_race || flag_msan {
 		instrumenting = true
 	}
+
 	if flag_remote && !pure_go {
 		if !pure_go {
 			log.Fatal("-remote does not support cgo or partial compilation")
@@ -279,6 +285,10 @@ func Main() {
 	}
 	if flag_remote && !dolinkobj {
 		log.Fatal("-remote requires generating compiler and linker objects")
+	}
+
+	if compiling_runtime && Debug['N'] != 0 {
+		log.Fatal("cannot disable optimizations while compiling runtime")
 	}
 
 	// parse -d argument
@@ -348,9 +358,9 @@ func Main() {
 		Debug['l'] = 1 - Debug['l']
 	}
 
-	Widthint = Thearch.LinkArch.IntSize
-	Widthptr = Thearch.LinkArch.PtrSize
-	Widthreg = Thearch.LinkArch.RegSize
+	Widthint = thearch.LinkArch.IntSize
+	Widthptr = thearch.LinkArch.PtrSize
+	Widthreg = thearch.LinkArch.RegSize
 
 	initUniverse()
 
@@ -502,7 +512,16 @@ func Main() {
 			}
 		}
 
+		// Prepare for SSA compilation.
+		// This must be before peekitabs, because peekitabs
+		// can trigger function compilation.
+		initssaconfig()
+
+		// Just before compilation, compile itabs found on
+		// the right side of OCONVIFACE so that methods
+		// can be de-virtualized during compilation.
 		Curfn = nil
+		peekitabs()
 
 		if flag_remote {
 			// Phase 7a: Concurrency escape analysis.
@@ -729,22 +748,22 @@ func findpkg(name string) (file string, ok bool) {
 func loadsys() {
 	block = 1
 
-	importpkg = Runtimepkg
+	inimport = true
 	typecheckok = true
 	defercheckwidth()
 
 	typs := runtimeTypes()
 	for _, d := range runtimeDecls {
-		sym := Pkglookup(d.name, importpkg)
+		sym := Pkglookup(d.name, Runtimepkg)
 		typ := typs[d.typ]
 		switch d.tag {
 		case funcTag:
-			importsym(sym, ONAME)
+			importsym(Runtimepkg, sym, ONAME)
 			n := newfuncname(sym)
 			n.Type = typ
 			declare(n, PFUNC)
 		case varTag:
-			importvar(sym, typ)
+			importvar(Runtimepkg, sym, typ)
 		default:
 			Fatalf("unhandled declaration tag %v", d.tag)
 		}
@@ -752,27 +771,23 @@ func loadsys() {
 
 	typecheckok = false
 	resumecheckwidth()
-	importpkg = nil
+	inimport = false
 }
 
-func importfile(f *Val, indent []byte) {
-	if importpkg != nil {
-		Fatalf("importpkg not nil")
-	}
-
+func importfile(f *Val) *Pkg {
 	path_, ok := f.U.(string)
 	if !ok {
-		yyerror("import statement not a string")
-		return
+		yyerror("import path must be a string")
+		return nil
 	}
 
 	if len(path_) == 0 {
 		yyerror("import path is empty")
-		return
+		return nil
 	}
 
 	if isbadimport(path_) {
-		return
+		return nil
 	}
 
 	// The package name main is no longer reserved,
@@ -799,15 +814,14 @@ func importfile(f *Val, indent []byte) {
 			errorexit()
 		}
 
-		importpkg = unsafepkg
 		imported_unsafe = true
-		return
+		return unsafepkg
 	}
 
 	if islocalname(path_) {
 		if path_[0] == '/' {
 			yyerror("import path cannot be absolute path")
-			return
+			return nil
 		}
 
 		prefix := Ctxt.Pathname
@@ -817,7 +831,7 @@ func importfile(f *Val, indent []byte) {
 		path_ = path.Join(prefix, path_)
 
 		if isbadimport(path_) {
-			return
+			return nil
 		}
 	}
 
@@ -827,10 +841,9 @@ func importfile(f *Val, indent []byte) {
 		errorexit()
 	}
 
-	importpkg = mkpkg(path_)
-
+	importpkg := mkpkg(path_)
 	if importpkg.Imported {
-		return
+		return importpkg
 	}
 
 	importpkg.Imported = true
@@ -923,18 +936,21 @@ func importfile(f *Val, indent []byte) {
 	switch c {
 	case '\n':
 		yyerror("cannot import %s: old export format no longer supported (recompile library)", path_)
+		return nil
 
 	case 'B':
 		if Debug_export != 0 {
 			fmt.Printf("importing %s (%s)\n", path_, file)
 		}
 		imp.ReadByte() // skip \n after $$B
-		Import(imp)
+		Import(importpkg, imp)
 
 	default:
 		yyerror("no import in %q", path_)
 		errorexit()
 	}
+
+	return importpkg
 }
 
 func pkgnotused(lineno src.XPos, path string, name string) {

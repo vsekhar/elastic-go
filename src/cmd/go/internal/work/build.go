@@ -2192,7 +2192,8 @@ func (gcToolchain) gc(b *Builder, p *load.Package, archive, obj string, asmhdr b
 	if p.Name == "main" {
 		gcargs[1] = "main"
 	}
-	if p.Standard && (p.ImportPath == "runtime" || strings.HasPrefix(p.ImportPath, "runtime/internal")) {
+	compilingRuntime := p.Standard && (p.ImportPath == "runtime" || strings.HasPrefix(p.ImportPath, "runtime/internal"))
+	if compilingRuntime {
 		// runtime compiles with a special gc flag to emit
 		// additional reflect type data.
 		gcargs = append(gcargs, "-+")
@@ -2232,7 +2233,22 @@ func (gcToolchain) gc(b *Builder, p *load.Package, archive, obj string, asmhdr b
 		}
 	}
 
-	args := []interface{}{cfg.BuildToolexec, base.Tool("compile"), "-o", ofile, "-trimpath", b.WorkDir, buildGcflags, gcargs, "-D", p.Internal.LocalPrefix, importArgs}
+	gcflags := buildGcflags
+	if compilingRuntime {
+		// Remove -N, if present.
+		// It is not possible to build the runtime with no optimizations,
+		// because the compiler cannot eliminate enough write barriers.
+		gcflags = make([]string, len(buildGcflags))
+		copy(gcflags, buildGcflags)
+		for i := 0; i < len(gcflags); i++ {
+			if gcflags[i] == "-N" {
+				copy(gcflags[i:], gcflags[i+1:])
+				gcflags = gcflags[:len(gcflags)-1]
+				i--
+			}
+		}
+	}
+	args := []interface{}{cfg.BuildToolexec, base.Tool("compile"), "-o", ofile, "-trimpath", b.WorkDir, gcflags, gcargs, "-D", p.Internal.LocalPrefix, importArgs}
 	if ofile == archive {
 		args = append(args, "-pack")
 	}
@@ -2918,6 +2934,26 @@ func (b *Builder) ccompile(p *load.Package, outfile string, flags []string, file
 	desc := p.ImportPath
 	output, err := b.runOut(p.Dir, desc, nil, compiler, flags, "-o", outfile, "-c", file)
 	if len(output) > 0 {
+		// On FreeBSD 11, when we pass -g to clang 3.8 it
+		// invokes its internal assembler with -dwarf-version=2.
+		// When it sees .section .note.GNU-stack, it warns
+		// "DWARF2 only supports one section per compilation unit".
+		// This warning makes no sense, since the section is empty,
+		// but it confuses people.
+		// We work around the problem by detecting the warning
+		// and dropping -g and trying again.
+		if bytes.Contains(output, []byte("DWARF2 only supports one section per compilation unit")) {
+			newFlags := make([]string, 0, len(flags))
+			for _, f := range flags {
+				if !strings.HasPrefix(f, "-g") {
+					newFlags = append(newFlags, f)
+				}
+			}
+			if len(newFlags) < len(flags) {
+				return b.ccompile(p, outfile, newFlags, file, compiler)
+			}
+		}
+
 		b.showOutput(p.Dir, desc, b.processOutput(output))
 		if err != nil {
 			err = errPrintedOutput

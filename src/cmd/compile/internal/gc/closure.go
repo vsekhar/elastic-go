@@ -11,6 +11,7 @@ import (
 // function literals aka closures
 func closurehdr(ntype *Node) {
 	n := nod(OCLOSURE, nil, nil)
+	n.Func.SetIsHiddenClosure(Curfn != nil)
 	n.Func.Ntype = ntype
 	n.Func.Depth = funcdepth
 	n.Func.Outerfunc = Curfn
@@ -209,6 +210,7 @@ func makeclosure(func_ *Node) *Node {
 
 	// create the function
 	xfunc := nod(ODCLFUNC, nil, nil)
+	xfunc.Func.SetIsHiddenClosure(Curfn != nil)
 
 	xfunc.Func.Nname = newfuncname(closurename(func_))
 	xfunc.Func.Nname.Sym.SetExported(true) // disable export
@@ -343,7 +345,7 @@ func transformclosure(xfunc *Node) {
 				// and v remains PAUTOHEAP with &v heapaddr
 				// (accesses will implicitly deref &v).
 				addr := newname(lookupf("&%s", v.Sym.Name))
-				addr.Type = ptrto(v.Type)
+				addr.Type = typPtr(v.Type)
 				addr.Class = PPARAM
 				v.Name.Param.Heapaddr = addr
 				fld.Nname = addr
@@ -382,7 +384,7 @@ func transformclosure(xfunc *Node) {
 
 			cv.Type = v.Type
 			if !v.Name.Byval() {
-				cv.Type = ptrto(v.Type)
+				cv.Type = typPtr(v.Type)
 			}
 			offset = Rnd(offset, int64(cv.Type.Align))
 			cv.Xoffset = offset
@@ -621,20 +623,17 @@ func makepartialcall(fn *Node, t0 *Type, meth *Sym) *Node {
 	if int(cv.Type.Align) > Widthptr {
 		cv.Xoffset = int64(cv.Type.Align)
 	}
-	ptr := nod(ONAME, nil, nil)
-	ptr.Sym = lookup("rcvr")
+	ptr := newname(lookup("rcvr"))
 	ptr.Class = PAUTO
-	ptr.SetAddable(true)
 	ptr.SetUsed(true)
 	ptr.Name.Curfn = xfunc
-	ptr.Xoffset = 0
 	xfunc.Func.Dcl = append(xfunc.Func.Dcl, ptr)
 	var body []*Node
 	if rcvrtype.IsPtr() || rcvrtype.IsInterface() {
 		ptr.Name.Param.Ntype = typenod(rcvrtype)
 		body = append(body, nod(OAS, ptr, cv))
 	} else {
-		ptr.Name.Param.Ntype = typenod(ptrto(rcvrtype))
+		ptr.Name.Param.Ntype = typenod(typPtr(rcvrtype))
 		body = append(body, nod(OAS, ptr, nod(OADDR, cv, nil)))
 	}
 

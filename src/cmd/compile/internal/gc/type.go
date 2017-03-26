@@ -11,6 +11,7 @@ package gc
 
 import (
 	"cmd/compile/internal/ssa"
+	"cmd/internal/obj"
 	"cmd/internal/src"
 	"fmt"
 )
@@ -64,7 +65,6 @@ const (
 	// pseudo-types for frame layout
 	TFUNCARGS
 	TCHANARGS
-	TINTERMETH
 
 	// pseudo-types for import/export
 	TDDDFIELD // wrapper: contained type is a ... field
@@ -150,9 +150,8 @@ type Type struct {
 	sliceOf *Type
 	ptrTo   *Type
 
-	Sym    *Sym     // symbol containing name, for named types
-	Vargen int32    // unique name for OTYPE/ONAME
-	Pos    src.XPos // position at which this type was declared, implicitly or explicitly
+	Sym    *Sym  // symbol containing name, for named types
+	Vargen int32 // unique name for OTYPE/ONAME
 
 	Etype  EType // kind of type
 	Trecur uint8 // to detect loops
@@ -408,7 +407,6 @@ func typ(et EType) *Type {
 	t := &Type{
 		Etype: et,
 		Width: BADWIDTH,
-		Pos:   lineno,
 	}
 	t.Orig = t
 	// TODO(josharian): lazily initialize some of these?
@@ -419,8 +417,6 @@ func typ(et EType) *Type {
 		t.Extra = new(ForwardType)
 	case TFUNC:
 		t.Extra = new(FuncType)
-	case TINTERMETH:
-		t.Extra = InterMethType{}
 	case TSTRUCT:
 		t.Extra = new(StructType)
 	case TINTER:
@@ -491,20 +487,35 @@ func typMap(k, v *Type) *Type {
 	return t
 }
 
+// typPtrCacheEnabled controls whether *T Types are cached in T.
+// Caching is disabled just before starting the backend.
+// This allows the backend to run concurrently.
+var typPtrCacheEnabled = true
+
 // typPtr returns the pointer type pointing to t.
 func typPtr(elem *Type) *Type {
+	if elem == nil {
+		Fatalf("typPtr: pointer to elem Type is nil")
+	}
+
 	if t := elem.ptrTo; t != nil {
 		if t.Elem() != elem {
-			Fatalf("elem mismatch")
+			Fatalf("typPtr: elem mismatch")
 		}
 		return t
+	}
+
+	if Tptr == 0 {
+		Fatalf("typPtr: Tptr not initialized")
 	}
 
 	t := typ(Tptr)
 	t.Extra = PtrType{Elem: elem}
 	t.Width = int64(Widthptr)
 	t.Align = uint8(Widthptr)
-	elem.ptrTo = t
+	if typPtrCacheEnabled {
+		elem.ptrTo = t
+	}
 	return t
 }
 
@@ -798,8 +809,6 @@ func (t *Type) Nname() *Node {
 	switch t.Etype {
 	case TFUNC:
 		return t.Extra.(*FuncType).Nname
-	case TINTERMETH:
-		return t.Extra.(InterMethType).Nname
 	}
 	Fatalf("Type.Nname %v %v", t.Etype, t)
 	return nil
@@ -810,8 +819,6 @@ func (t *Type) SetNname(n *Node) {
 	switch t.Etype {
 	case TFUNC:
 		t.Extra.(*FuncType).Nname = n
-	case TINTERMETH:
-		t.Extra = InterMethType{Nname: n}
 	default:
 		Fatalf("Type.SetNname %v %v", t.Etype, t)
 	}
@@ -837,6 +844,7 @@ func (t *Type) Fields() *Fields {
 	case TSTRUCT:
 		return &t.Extra.(*StructType).fields
 	case TINTER:
+		dowidth(t)
 		return &t.Extra.(*InterType).fields
 	}
 	Fatalf("Fields: type %v does not have fields", t)
@@ -856,6 +864,7 @@ func (t *Type) FieldSlice() []*Field {
 
 // SetFields sets struct/interface type t's fields/methods to fields.
 func (t *Type) SetFields(fields []*Field) {
+	t.wantEtype(TSTRUCT)
 	for _, f := range fields {
 		// If type T contains a field F with a go:notinheap
 		// type, then T must also be go:notinheap. Otherwise,
@@ -868,6 +877,11 @@ func (t *Type) SetFields(fields []*Field) {
 		}
 	}
 	t.Fields().Set(fields)
+}
+
+func (t *Type) SetInterface(methods []*Field) {
+	t.wantEtype(TINTER)
+	t.Methods().Set(methods)
 }
 
 func (t *Type) isDDDArray() bool {
@@ -1216,7 +1230,7 @@ func (t *Type) ElemType() ssa.Type {
 	return t.Elem()
 }
 func (t *Type) PtrTo() ssa.Type {
-	return ptrto(t)
+	return typPtr(t)
 }
 
 func (t *Type) NumFields() int {
@@ -1278,4 +1292,18 @@ func (t *Type) IsUntyped() bool {
 		return true
 	}
 	return false
+}
+
+// HasPointer returns whether t contains heap pointer.
+// This is used for write barrier insertion, so we ignore
+// pointers to go:notinheap types.
+func (t *Type) HasPointer() bool {
+	if t.IsPtr() && t.Elem().NotInHeap() {
+		return false
+	}
+	return haspointers(t)
+}
+
+func (t *Type) Symbol() *obj.LSym {
+	return Linksym(typenamesym(t))
 }

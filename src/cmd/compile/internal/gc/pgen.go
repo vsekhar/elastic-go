@@ -12,24 +12,26 @@ import (
 	"cmd/internal/sys"
 	"fmt"
 	"sort"
-	"strings"
 )
 
 // "Portable" code generation.
 
 var makefuncdatasym_nsym int
 
-func makefuncdatasym(nameprefix string, funcdatakind int64) *Sym {
+func makefuncdatasym(pp *Progs, nameprefix string, funcdatakind int64) *Sym {
 	sym := lookupN(nameprefix, makefuncdatasym_nsym)
 	makefuncdatasym_nsym++
-	pnod := newname(sym)
-	pnod.Class = PEXTERN
-	p := Gins(obj.AFUNCDATA, nil, pnod)
+	p := pp.Prog(obj.AFUNCDATA)
 	Addrconst(&p.From, funcdatakind)
+	p.To.Type = obj.TYPE_MEM
+	p.To.Name = obj.NAME_EXTERN
+	p.To.Sym = Linksym(sym)
 	return sym
 }
 
-// gvardef inserts a VARDEF for n into the instruction stream.
+// TODO(mdempsky): Update to reference OpVar{Def,Kill,Live} instead
+// and move to plive.go.
+
 // VARDEF is an annotation for the liveness analysis, marking a place
 // where a complete initialization (definition) of a variable begins.
 // Since the liveness analysis can see initialization of single-word
@@ -84,55 +86,6 @@ func makefuncdatasym(nameprefix string, funcdatakind int64) *Sym {
 // even if its address has been taken. That is, a VARKILL annotation asserts
 // that its argument is certainly dead, for use when the liveness analysis
 // would not otherwise be able to deduce that fact.
-
-func gvardefx(n *Node, as obj.As) {
-	if n == nil {
-		Fatalf("gvardef nil")
-	}
-	if n.Op != ONAME {
-		yyerror("gvardef %#v; %v", n.Op, n)
-		return
-	}
-
-	switch n.Class {
-	case PAUTO, PPARAM, PPARAMOUT:
-		if !n.Used() {
-			Prog(obj.ANOP)
-			return
-		}
-
-		if as == obj.AVARLIVE {
-			Gins(as, n, nil)
-		} else {
-			Gins(as, nil, n)
-		}
-	}
-}
-
-func Gvardef(n *Node) {
-	gvardefx(n, obj.AVARDEF)
-}
-
-func Gvarkill(n *Node) {
-	gvardefx(n, obj.AVARKILL)
-}
-
-func Gvarlive(n *Node) {
-	gvardefx(n, obj.AVARLIVE)
-}
-
-func removevardef(firstp *obj.Prog) {
-	for p := firstp; p != nil; p = p.Link {
-		for p.Link != nil && (p.Link.As == obj.AVARDEF || p.Link.As == obj.AVARKILL || p.Link.As == obj.AVARLIVE) {
-			p.Link = p.Link.Link
-		}
-		if p.To.Type == obj.TYPE_BRANCH {
-			for p.To.Val.(*obj.Prog) != nil && (p.To.Val.(*obj.Prog).As == obj.AVARDEF || p.To.Val.(*obj.Prog).As == obj.AVARKILL || p.To.Val.(*obj.Prog).As == obj.AVARLIVE) {
-				p.To.Val = p.To.Val.(*obj.Prog).Link
-			}
-		}
-	}
-}
 
 func emitptrargsmap() {
 	if Curfn.Func.Nname.Sym.Name == "_" {
@@ -220,12 +173,13 @@ func (s byStackVar) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
 var scratchFpMem *Node
 
-func (s *ssaExport) AllocFrame(f *ssa.Func) {
-	Stksize = 0
-	stkptrsize = 0
+func (s *ssafn) AllocFrame(f *ssa.Func) {
+	s.stksize = 0
+	s.stkptrsize = 0
+	fn := s.curfn.Func
 
 	// Mark the PAUTO's unused.
-	for _, ln := range Curfn.Func.Dcl {
+	for _, ln := range fn.Dcl {
 		if ln.Class == PAUTO {
 			ln.SetUsed(false)
 		}
@@ -255,45 +209,44 @@ func (s *ssaExport) AllocFrame(f *ssa.Func) {
 	}
 
 	if f.Config.NeedsFpScratch {
-		scratchFpMem = temp(Types[TUINT64])
+		scratchFpMem = tempAt(src.NoXPos, s.curfn, Types[TUINT64])
 		scratchFpMem.SetUsed(scratchUsed)
 	}
 
-	sort.Sort(byStackVar(Curfn.Func.Dcl))
+	sort.Sort(byStackVar(fn.Dcl))
 
 	// Reassign stack offsets of the locals that are used.
-	for i, n := range Curfn.Func.Dcl {
+	for i, n := range fn.Dcl {
 		if n.Op != ONAME || n.Class != PAUTO {
 			continue
 		}
 		if !n.Used() {
-			Curfn.Func.Dcl = Curfn.Func.Dcl[:i]
+			fn.Dcl = fn.Dcl[:i]
 			break
 		}
 
 		dowidth(n.Type)
 		w := n.Type.Width
-		if w >= Thearch.MAXWIDTH || w < 0 {
+		if w >= thearch.MAXWIDTH || w < 0 {
 			Fatalf("bad width")
 		}
-		Stksize += w
-		Stksize = Rnd(Stksize, int64(n.Type.Align))
+		s.stksize += w
+		s.stksize = Rnd(s.stksize, int64(n.Type.Align))
 		if haspointers(n.Type) {
-			stkptrsize = Stksize
+			s.stkptrsize = s.stksize
 		}
-		if Thearch.LinkArch.InFamily(sys.MIPS, sys.MIPS64, sys.ARM, sys.ARM64, sys.PPC64, sys.S390X) {
-			Stksize = Rnd(Stksize, int64(Widthptr))
+		if thearch.LinkArch.InFamily(sys.MIPS, sys.MIPS64, sys.ARM, sys.ARM64, sys.PPC64, sys.S390X) {
+			s.stksize = Rnd(s.stksize, int64(Widthptr))
 		}
-		if Stksize >= 1<<31 {
-			setlineno(Curfn)
-			yyerror("stack frame too large (>2GB)")
+		if s.stksize >= 1<<31 {
+			yyerrorl(s.curfn.Pos, "stack frame too large (>2GB)")
 		}
 
-		n.Xoffset = -Stksize
+		n.Xoffset = -s.stksize
 	}
 
-	Stksize = Rnd(Stksize, int64(Widthreg))
-	stkptrsize = Rnd(stkptrsize, int64(Widthreg))
+	s.stksize = Rnd(s.stksize, int64(Widthreg))
+	s.stkptrsize = Rnd(s.stkptrsize, int64(Widthreg))
 }
 
 func compile(fn *Node) {
@@ -316,132 +269,63 @@ func compile(fn *Node) {
 		assertI2I2 = Sysfunc("assertI2I2")
 	}
 
-	defer func(lno src.XPos) {
-		lineno = lno
-	}(setlineno(fn))
-
 	Curfn = fn
-	dowidth(Curfn.Type)
+	dowidth(fn.Type)
 
 	if fn.Nbody.Len() == 0 {
-		if pure_go || strings.HasPrefix(fn.Func.Nname.Sym.Name, "init.") {
-			yyerror("missing function body for %q", fn.Func.Nname.Sym.Name)
-			return
-		}
-
 		emitptrargsmap()
 		return
 	}
 
 	saveerrors()
 
-	if Curfn.Type.FuncType().Outnamed {
-		// add clearing of the output parameters
-		for _, t := range Curfn.Type.Results().Fields().Slice() {
-			if t.Nname != nil {
-				n := nod(OAS, t.Nname, nil)
-				n = typecheck(n, Etop)
-				Curfn.Nbody.Prepend(n)
-			}
-		}
-	}
-
-	order(Curfn)
+	order(fn)
 	if nerrors != 0 {
 		return
 	}
 
-	hasdefer = false
-	walk(Curfn)
+	walk(fn)
+	if nerrors != 0 {
+		return
+	}
+	checkcontrolflow(fn)
 	if nerrors != 0 {
 		return
 	}
 	if instrumenting {
-		instrument(Curfn)
+		instrument(fn)
 	}
 	if nerrors != 0 {
 		return
 	}
+
+	// From this point, there should be no uses of Curfn. Enforce that.
+	Curfn = nil
 
 	// Build an SSA backend function.
-	ssafn := buildssa(Curfn)
+	ssafn := buildssa(fn)
 	if nerrors != 0 {
 		return
 	}
-
-	plist := new(obj.Plist)
-	pc = Ctxt.NewProg()
-	Clearp(pc)
-	plist.Firstpc = pc
-
-	setlineno(Curfn)
-
-	nam := Curfn.Func.Nname
-	if isblank(nam) {
-		nam = nil
-	}
-	ptxt := Gins(obj.ATEXT, nam, nil)
-	fnsym := ptxt.From.Sym
-
-	ptxt.From3 = new(obj.Addr)
-	if fn.Func.Dupok() {
-		ptxt.From3.Offset |= obj.DUPOK
-	}
-	if fn.Func.Wrapper() {
-		ptxt.From3.Offset |= obj.WRAPPER
-	}
-	if fn.Func.NoFramePointer() {
-		ptxt.From3.Offset |= obj.NOFRAME
-	}
-	if fn.Func.Needctxt() {
-		ptxt.From3.Offset |= obj.NEEDCTXT
-	}
-	if fn.Func.Pragma&Nosplit != 0 {
-		ptxt.From3.Offset |= obj.NOSPLIT
-	}
-	if fn.Func.ReflectMethod() {
-		ptxt.From3.Offset |= obj.REFLECTMETHOD
-	}
-	if fn.Func.Pragma&Systemstack != 0 {
-		ptxt.From.Sym.Set(obj.AttrCFunc, true)
-		if fn.Func.Pragma&Nosplit != 0 {
-			yyerror("go:nosplit and go:systemstack cannot be combined")
-		}
-	}
-
-	// Clumsy but important.
-	// See test/recover.go for test cases and src/reflect/value.go
-	// for the actual functions being considered.
-	if myimportpath == "reflect" {
-		if Curfn.Func.Nname.Sym.Name == "callReflect" || Curfn.Func.Nname.Sym.Name == "callMethod" {
-			ptxt.From3.Offset |= obj.WRAPPER
-		}
-	}
-
-	gcargs := makefuncdatasym("gcargs·", obj.FUNCDATA_ArgsPointerMaps)
-	gclocals := makefuncdatasym("gclocals·", obj.FUNCDATA_LocalsPointerMaps)
 
 	if flag_remote {
 		// TODO(vsekhar): Rewrite accesses to remote vars in SSA
 		// (analysis is done over the whole program parse tree earlier)
 	}
-
-	genssa(ssafn, ptxt, gcargs, gclocals)
-	ssafn.Free()
-
-	obj.Flushplist(Ctxt, plist) // convert from Prog list to machine code
-	ptxt = nil                  // nil to prevent misuse; Prog may have been freed by Flushplist
-
-	fieldtrack(fnsym, fn.Func.FieldTrack)
+	pp := newProgs(fn)
+	genssa(ssafn, pp)
+	fieldtrack(pp.Text.From.Sym, fn.Func.FieldTrack)
+	pp.Flush()
 }
 
-func debuginfo(fnsym *obj.LSym) []*dwarf.Var {
-	if expect := Linksym(Curfn.Func.Nname.Sym); fnsym != expect {
+func debuginfo(fnsym *obj.LSym, curfn interface{}) []*dwarf.Var {
+	fn := curfn.(*Node)
+	if expect := Linksym(fn.Func.Nname.Sym); fnsym != expect {
 		Fatalf("unexpected fnsym: %v != %v", fnsym, expect)
 	}
 
 	var vars []*dwarf.Var
-	for _, n := range Curfn.Func.Dcl {
+	for _, n := range fn.Func.Dcl {
 		if n.Op != ONAME { // might be OTYPE or OLITERAL
 			continue
 		}

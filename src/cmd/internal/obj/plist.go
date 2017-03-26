@@ -12,10 +12,11 @@ import (
 
 type Plist struct {
 	Firstpc *Prog
+	Curfn   interface{} // holds a *gc.Node, if non-nil
 }
 
 func Flushplist(ctxt *Link, plist *Plist) {
-	flushplist(ctxt, plist, ctxt.Debugasm == 0)
+	flushplist(ctxt, plist, !ctxt.Debugasm)
 }
 func FlushplistNoFree(ctxt *Link, plist *Plist) {
 	flushplist(ctxt, plist, false)
@@ -28,7 +29,7 @@ func flushplist(ctxt *Link, plist *Plist, freeProgs bool) {
 
 	var plink *Prog
 	for p := plist.Firstpc; p != nil; p = plink {
-		if ctxt.Debugasm != 0 && ctxt.Debugvlog != 0 {
+		if ctxt.Debugasm && ctxt.Debugvlog {
 			fmt.Printf("obj: %v\n", p)
 		}
 		plink = p.Link
@@ -102,8 +103,7 @@ func flushplist(ctxt *Link, plist *Plist, freeProgs bool) {
 			continue
 		}
 		found := false
-		var p *Prog
-		for p = s.Text; p != nil; p = p.Link {
+		for p := s.Text; p != nil; p = p.Link {
 			if p.As == AFUNCDATA && p.From.Type == TYPE_CONST && p.From.Offset == FUNCDATA_ArgsPointerMaps {
 				found = true
 				break
@@ -111,7 +111,7 @@ func flushplist(ctxt *Link, plist *Plist, freeProgs bool) {
 		}
 
 		if !found {
-			p = Appendp(ctxt, s.Text)
+			p := Appendp(ctxt, s.Text)
 			p.As = AFUNCDATA
 			p.From.Type = TYPE_CONST
 			p.From.Offset = FUNCDATA_ArgsPointerMaps
@@ -128,7 +128,7 @@ func flushplist(ctxt *Link, plist *Plist, freeProgs bool) {
 		ctxt.Arch.Preprocess(ctxt, s)
 		ctxt.Arch.Assemble(ctxt, s)
 		linkpcln(ctxt, s)
-		makeFuncDebugEntry(ctxt, s)
+		makeFuncDebugEntry(ctxt, plist.Curfn, s)
 		if freeProgs {
 			s.Text = nil
 		}

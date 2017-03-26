@@ -8,6 +8,7 @@ package gc
 
 import (
 	"cmd/internal/obj"
+	"cmd/internal/src"
 	"fmt"
 )
 
@@ -112,7 +113,7 @@ func moveToHeap(n *Node) {
 
 	// Allocate a local stack variable to hold the pointer to the heap copy.
 	// temp will add it to the function declaration list automatically.
-	heapaddr := temp(ptrto(n.Type))
+	heapaddr := temp(typPtr(n.Type))
 	heapaddr.Sym = lookup("&" + n.Sym.Name)
 	heapaddr.Orig.Sym = heapaddr.Sym
 
@@ -133,8 +134,8 @@ func moveToHeap(n *Node) {
 		// Preserve a copy so we can still write code referring to the original,
 		// and substitute that copy into the function declaration list
 		// so that analyses of the local (on-stack) variables use it.
-		stackcopy := nod(ONAME, nil, nil)
-		stackcopy.Sym = n.Sym
+		stackcopy := newname(n.Sym)
+		stackcopy.SetAddable(false)
 		stackcopy.Type = n.Type
 		stackcopy.Xoffset = n.Xoffset
 		stackcopy.Class = n.Class
@@ -192,8 +193,7 @@ func tempname(nn *Node, t *Type) {
 	}
 
 	if t == nil {
-		yyerror("tempname called with nil type")
-		t = Types[TINT32]
+		Fatalf("tempname called with nil type")
 	}
 
 	// give each tmp a different name so that there
@@ -201,19 +201,16 @@ func tempname(nn *Node, t *Type) {
 	// Add a preceding . to avoid clash with legal names.
 	s := lookupN(".autotmp_", statuniqgen)
 	statuniqgen++
-	n := nod(ONAME, nil, nil)
-	n.Sym = s
+	n := newname(s)
 	s.Def = n
 	n.Type = t
 	n.Class = PAUTO
-	n.SetAddable(true)
 	n.Esc = EscNever
 	n.Name.Curfn = Curfn
 	n.Name.SetAutoTemp(true)
 	Curfn.Func.Dcl = append(Curfn.Func.Dcl, n)
 
 	dowidth(t)
-	n.Xoffset = 0
 	*nn = *n
 }
 
@@ -222,4 +219,13 @@ func temp(t *Type) *Node {
 	tempname(&n, t)
 	n.Sym.Def.SetUsed(true)
 	return n.Orig
+}
+
+func tempAt(pos src.XPos, curfn *Node, t *Type) *Node {
+	// TODO(mdempsky/josharian): Remove all reads and writes of lineno and Curfn.
+	lineno = pos
+	Curfn = curfn
+	n := temp(t)
+	Curfn = nil
+	return n
 }

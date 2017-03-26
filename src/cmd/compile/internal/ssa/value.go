@@ -128,17 +128,15 @@ func (v *Value) auxString() string {
 		return fmt.Sprintf(" [%d]", v.AuxInt32())
 	case auxInt64, auxInt128:
 		return fmt.Sprintf(" [%d]", v.AuxInt)
-	case auxSizeAndAlign:
-		return fmt.Sprintf(" [%s]", SizeAndAlign(v.AuxInt))
 	case auxFloat32, auxFloat64:
 		return fmt.Sprintf(" [%g]", v.AuxFloat())
 	case auxString:
 		return fmt.Sprintf(" {%q}", v.Aux)
-	case auxSym:
+	case auxSym, auxTyp:
 		if v.Aux != nil {
 			return fmt.Sprintf(" {%v}", v.Aux)
 		}
-	case auxSymOff, auxSymInt32:
+	case auxSymOff, auxSymInt32, auxTypSize:
 		s := ""
 		if v.Aux != nil {
 			s = fmt.Sprintf(" {%v}", v.Aux)
@@ -153,12 +151,6 @@ func (v *Value) auxString() string {
 			s = fmt.Sprintf(" {%v}", v.Aux)
 		}
 		return s + fmt.Sprintf(" [%s]", v.AuxValAndOff())
-	case auxSymSizeAndAlign:
-		s := ""
-		if v.Aux != nil {
-			s = fmt.Sprintf(" {%v}", v.Aux)
-		}
-		return s + fmt.Sprintf(" [%s]", SizeAndAlign(v.AuxInt))
 	}
 	return ""
 }
@@ -234,7 +226,7 @@ func (v *Value) copyInto(b *Block) *Value {
 func (v *Value) Logf(msg string, args ...interface{}) { v.Block.Logf(msg, args...) }
 func (v *Value) Log() bool                            { return v.Block.Log() }
 func (v *Value) Fatalf(msg string, args ...interface{}) {
-	v.Block.Func.Config.Fatalf(v.Pos, msg, args...)
+	v.Block.Func.fe.Fatalf(v.Pos, msg, args...)
 }
 
 // isGenericIntConst returns whether v is a generic integer constant.
@@ -310,4 +302,24 @@ func (v *Value) RegName() string {
 		v.Fatalf("nil register for value: %s\n%s\n", v.LongString(), v.Block.Func)
 	}
 	return reg.(*Register).name
+}
+
+// MemoryArg returns the memory argument for the Value.
+// The returned value, if non-nil, will be memory-typed,
+// except in the case where v is Select1, in which case
+// the returned value will be a tuple containing a memory
+// type. Otherwise, nil is returned.
+func (v *Value) MemoryArg() *Value {
+	if v.Op == OpPhi {
+		v.Fatalf("MemoryArg on Phi")
+	}
+	na := len(v.Args)
+	if na == 0 {
+		return nil
+	}
+	if m := v.Args[na-1]; m.Type.IsMemory() ||
+		(v.Op == OpSelect1 && m.Type.FieldType(1).IsMemory()) {
+		return m
+	}
+	return nil
 }

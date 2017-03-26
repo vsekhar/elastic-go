@@ -225,21 +225,21 @@ func walkselect(sel *Node) {
 		case OSEND:
 			// if selectnbsend(c, v) { body } else { default body }
 			ch := n.Left
-			r.Left = mkcall1(chanfn("selectnbsend", 2, ch.Type), Types[TBOOL], &r.Ninit, typename(ch.Type), ch, n.Right)
+			r.Left = mkcall1(chanfn("selectnbsend", 2, ch.Type), Types[TBOOL], &r.Ninit, ch, n.Right)
 
 		case OSELRECV:
 			// if c != nil && selectnbrecv(&v, c) { body } else { default body }
 			r = nod(OIF, nil, nil)
 			r.Ninit.Set(cas.Ninit.Slice())
 			ch := n.Right.Left
-			r.Left = mkcall1(chanfn("selectnbrecv", 2, ch.Type), Types[TBOOL], &r.Ninit, typename(ch.Type), n.Left, ch)
+			r.Left = mkcall1(chanfn("selectnbrecv", 2, ch.Type), Types[TBOOL], &r.Ninit, n.Left, ch)
 
 		case OSELRECV2:
 			// if c != nil && selectnbrecv2(&v, c) { body } else { default body }
 			r = nod(OIF, nil, nil)
 			r.Ninit.Set(cas.Ninit.Slice())
 			ch := n.Right.Left
-			r.Left = mkcall1(chanfn("selectnbrecv2", 2, ch.Type), Types[TBOOL], &r.Ninit, typename(ch.Type), n.Left, n.List.First(), ch)
+			r.Left = mkcall1(chanfn("selectnbrecv2", 2, ch.Type), Types[TBOOL], &r.Ninit, n.Left, n.List.First(), ch)
 		}
 
 		r.Left = typecheck(r.Left, Erv)
@@ -258,7 +258,7 @@ func walkselect(sel *Node) {
 	r = nod(OAS, selv, nil)
 	r = typecheck(r, Etop)
 	init = append(init, r)
-	var_ = conv(conv(nod(OADDR, selv, nil), Types[TUNSAFEPTR]), ptrto(Types[TUINT8]))
+	var_ = conv(conv(nod(OADDR, selv, nil), Types[TUNSAFEPTR]), typPtr(Types[TUINT8]))
 	r = mkcall("newselect", nil, nil, var_, nodintconst(selv.Type.Width), nodintconst(sel.Xoffset))
 	r = typecheck(r, Etop)
 	init = append(init, r)
@@ -332,11 +332,11 @@ func selecttype(size int32) *Type {
 	// and then cache; and also cache Select per size.
 
 	scase := nod(OTSTRUCT, nil, nil)
-	scase.List.Append(nod(ODCLFIELD, newname(lookup("elem")), typenod(ptrto(Types[TUINT8]))))
-	scase.List.Append(nod(ODCLFIELD, newname(lookup("chan")), typenod(ptrto(Types[TUINT8]))))
+	scase.List.Append(nod(ODCLFIELD, newname(lookup("elem")), typenod(typPtr(Types[TUINT8]))))
+	scase.List.Append(nod(ODCLFIELD, newname(lookup("chan")), typenod(typPtr(Types[TUINT8]))))
 	scase.List.Append(nod(ODCLFIELD, newname(lookup("pc")), typenod(Types[TUINTPTR])))
 	scase.List.Append(nod(ODCLFIELD, newname(lookup("kind")), typenod(Types[TUINT16])))
-	scase.List.Append(nod(ODCLFIELD, newname(lookup("receivedp")), typenod(ptrto(Types[TUINT8]))))
+	scase.List.Append(nod(ODCLFIELD, newname(lookup("receivedp")), typenod(typPtr(Types[TUINT8]))))
 	scase.List.Append(nod(ODCLFIELD, newname(lookup("releasetime")), typenod(Types[TUINT64])))
 	scase = typecheck(scase, Etype)
 	scase.Type.SetNoalg(true)
@@ -345,8 +345,8 @@ func selecttype(size int32) *Type {
 	sel := nod(OTSTRUCT, nil, nil)
 	sel.List.Append(nod(ODCLFIELD, newname(lookup("tcase")), typenod(Types[TUINT16])))
 	sel.List.Append(nod(ODCLFIELD, newname(lookup("ncase")), typenod(Types[TUINT16])))
-	sel.List.Append(nod(ODCLFIELD, newname(lookup("pollorder")), typenod(ptrto(Types[TUINT8]))))
-	sel.List.Append(nod(ODCLFIELD, newname(lookup("lockorder")), typenod(ptrto(Types[TUINT8]))))
+	sel.List.Append(nod(ODCLFIELD, newname(lookup("pollorder")), typenod(typPtr(Types[TUINT8]))))
+	sel.List.Append(nod(ODCLFIELD, newname(lookup("lockorder")), typenod(typPtr(Types[TUINT8]))))
 	arr := nod(OTARRAY, nodintconst(int64(size)), scase)
 	sel.List.Append(nod(ODCLFIELD, newname(lookup("scase")), arr))
 	arr = nod(OTARRAY, nodintconst(int64(size)), typenod(Types[TUINT16]))

@@ -337,6 +337,7 @@ var serveMuxTests = []struct {
 	{"GET", "codesearch.google.com", "/search/", 203, "codesearch.google.com/"},
 	{"GET", "codesearch.google.com", "/search/foo", 203, "codesearch.google.com/"},
 	{"GET", "codesearch.google.com", "/", 203, "codesearch.google.com/"},
+	{"GET", "codesearch.google.com:443", "/", 203, "codesearch.google.com/"},
 	{"GET", "images.google.com", "/search", 201, "/search"},
 	{"GET", "images.google.com", "/search/", 404, ""},
 	{"GET", "images.google.com", "/search/foo", 404, ""},
@@ -460,16 +461,73 @@ func TestMuxRedirectLeadingSlashes(t *testing.T) {
 	}
 }
 
+func BenchmarkServeMux(b *testing.B) {
+
+	type test struct {
+		path string
+		code int
+		req  *Request
+	}
+
+	// Build example handlers and requests
+	var tests []test
+	endpoints := []string{"search", "dir", "file", "change", "count", "s"}
+	for _, e := range endpoints {
+		for i := 200; i < 230; i++ {
+			p := fmt.Sprintf("/%s/%d/", e, i)
+			tests = append(tests, test{
+				path: p,
+				code: i,
+				req:  &Request{Method: "GET", Host: "localhost", URL: &url.URL{Path: p}},
+			})
+		}
+	}
+	mux := NewServeMux()
+	for _, tt := range tests {
+		mux.Handle(tt.path, serve(tt.code))
+	}
+
+	rw := httptest.NewRecorder()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, tt := range tests {
+			*rw = httptest.ResponseRecorder{}
+			h, pattern := mux.Handler(tt.req)
+			h.ServeHTTP(rw, tt.req)
+			if pattern != tt.path || rw.Code != tt.code {
+				b.Fatalf("got %d, %q, want %d, %q", rw.Code, pattern, tt.code, tt.path)
+			}
+		}
+	}
+}
+
 func TestServerTimeouts(t *testing.T) {
 	setParallel(t)
 	defer afterTest(t)
+	// Try three times, with increasing timeouts.
+	tries := []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second}
+	for i, timeout := range tries {
+		err := testServerTimeouts(timeout)
+		if err == nil {
+			return
+		}
+		t.Logf("failed at %v: %v", timeout, err)
+		if i != len(tries)-1 {
+			t.Logf("retrying at %v ...", tries[i+1])
+		}
+	}
+	t.Fatal("all attempts failed")
+}
+
+func testServerTimeouts(timeout time.Duration) error {
 	reqNum := 0
 	ts := httptest.NewUnstartedServer(HandlerFunc(func(res ResponseWriter, req *Request) {
 		reqNum++
 		fmt.Fprintf(res, "req=%d", reqNum)
 	}))
-	ts.Config.ReadTimeout = 250 * time.Millisecond
-	ts.Config.WriteTimeout = 250 * time.Millisecond
+	ts.Config.ReadTimeout = timeout
+	ts.Config.WriteTimeout = timeout
 	ts.Start()
 	defer ts.Close()
 
@@ -477,12 +535,12 @@ func TestServerTimeouts(t *testing.T) {
 	c := ts.Client()
 	r, err := c.Get(ts.URL)
 	if err != nil {
-		t.Fatalf("http Get #1: %v", err)
+		return fmt.Errorf("http Get #1: %v", err)
 	}
 	got, err := ioutil.ReadAll(r.Body)
 	expected := "req=1"
 	if string(got) != expected || err != nil {
-		t.Errorf("Unexpected response for request #1; got %q ,%v; expected %q, nil",
+		return fmt.Errorf("Unexpected response for request #1; got %q ,%v; expected %q, nil",
 			string(got), err, expected)
 	}
 
@@ -490,17 +548,18 @@ func TestServerTimeouts(t *testing.T) {
 	t1 := time.Now()
 	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
 	if err != nil {
-		t.Fatalf("Dial: %v", err)
+		return fmt.Errorf("Dial: %v", err)
 	}
 	buf := make([]byte, 1)
 	n, err := conn.Read(buf)
 	conn.Close()
 	latency := time.Since(t1)
 	if n != 0 || err != io.EOF {
-		t.Errorf("Read = %v, %v, wanted %v, %v", n, err, 0, io.EOF)
+		return fmt.Errorf("Read = %v, %v, wanted %v, %v", n, err, 0, io.EOF)
 	}
-	if latency < 200*time.Millisecond /* fudge from 250 ms above */ {
-		t.Errorf("got EOF after %s, want >= %s", latency, 200*time.Millisecond)
+	minLatency := timeout / 5 * 4
+	if latency < minLatency {
+		return fmt.Errorf("got EOF after %s, want >= %s", latency, minLatency)
 	}
 
 	// Hit the HTTP server successfully again, verifying that the
@@ -508,29 +567,31 @@ func TestServerTimeouts(t *testing.T) {
 	// get "req=2", not "req=3")
 	r, err = c.Get(ts.URL)
 	if err != nil {
-		t.Fatalf("http Get #2: %v", err)
+		return fmt.Errorf("http Get #2: %v", err)
 	}
 	got, err = ioutil.ReadAll(r.Body)
+	r.Body.Close()
 	expected = "req=2"
 	if string(got) != expected || err != nil {
-		t.Errorf("Get #2 got %q, %v, want %q, nil", string(got), err, expected)
+		return fmt.Errorf("Get #2 got %q, %v, want %q, nil", string(got), err, expected)
 	}
 
 	if !testing.Short() {
 		conn, err := net.Dial("tcp", ts.Listener.Addr().String())
 		if err != nil {
-			t.Fatalf("Dial: %v", err)
+			return fmt.Errorf("long Dial: %v", err)
 		}
 		defer conn.Close()
 		go io.Copy(ioutil.Discard, conn)
 		for i := 0; i < 5; i++ {
 			_, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: foo\r\n\r\n"))
 			if err != nil {
-				t.Fatalf("on write %d: %v", i, err)
+				return fmt.Errorf("on write %d: %v", i, err)
 			}
-			time.Sleep(ts.Config.ReadTimeout / 2)
+			time.Sleep(timeout / 2)
 		}
 	}
+	return nil
 }
 
 // Test that the HTTP/2 server handles Server.WriteTimeout (Issue 18437)
@@ -587,7 +648,10 @@ func TestHTTP2WriteDeadlineExtendedOnNewRequest(t *testing.T) {
 func TestOnlyWriteTimeout(t *testing.T) {
 	setParallel(t)
 	defer afterTest(t)
-	var conn net.Conn
+	var (
+		mu   sync.RWMutex
+		conn net.Conn
+	)
 	var afterTimeoutErrc = make(chan error, 1)
 	ts := httptest.NewUnstartedServer(HandlerFunc(func(w ResponseWriter, req *Request) {
 		buf := make([]byte, 512<<10)
@@ -596,11 +660,17 @@ func TestOnlyWriteTimeout(t *testing.T) {
 			t.Errorf("handler Write error: %v", err)
 			return
 		}
+		mu.RLock()
+		defer mu.RUnlock()
+		if conn == nil {
+			t.Error("no established connection found")
+			return
+		}
 		conn.SetWriteDeadline(time.Now().Add(-30 * time.Second))
 		_, err = w.Write(buf)
 		afterTimeoutErrc <- err
 	}))
-	ts.Listener = trackLastConnListener{ts.Listener, &conn}
+	ts.Listener = trackLastConnListener{ts.Listener, &mu, &conn}
 	ts.Start()
 	defer ts.Close()
 
@@ -614,6 +684,7 @@ func TestOnlyWriteTimeout(t *testing.T) {
 			return
 		}
 		_, err = io.Copy(ioutil.Discard, res.Body)
+		res.Body.Close()
 		errc <- err
 	}()
 	select {
@@ -632,12 +703,18 @@ func TestOnlyWriteTimeout(t *testing.T) {
 // trackLastConnListener tracks the last net.Conn that was accepted.
 type trackLastConnListener struct {
 	net.Listener
+
+	mu   *sync.RWMutex
 	last *net.Conn // destination
 }
 
 func (l trackLastConnListener) Accept() (c net.Conn, err error) {
 	c, err = l.Listener.Accept()
-	*l.last = c
+	if err == nil {
+		l.mu.Lock()
+		*l.last = c
+		l.mu.Unlock()
+	}
 	return
 }
 
@@ -929,7 +1006,6 @@ func (c *blockingRemoteAddrConn) RemoteAddr() net.Addr {
 
 // Issue 12943
 func TestServerAllowsBlockingRemoteAddr(t *testing.T) {
-	setParallel(t)
 	defer afterTest(t)
 	ts := httptest.NewUnstartedServer(HandlerFunc(func(w ResponseWriter, r *Request) {
 		fmt.Fprintf(w, "RA:%s", r.RemoteAddr)
@@ -944,6 +1020,8 @@ func TestServerAllowsBlockingRemoteAddr(t *testing.T) {
 
 	c := ts.Client()
 	c.Timeout = time.Second
+	// Force separate connection for each:
+	c.Transport.(*Transport).DisableKeepAlives = true
 
 	fetch := func(num int, response chan<- string) {
 		resp, err := c.Get(ts.URL)

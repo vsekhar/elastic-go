@@ -32,6 +32,7 @@ func TestAssembly(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 
+	nameRegexp := regexp.MustCompile("func \\w+")
 	t.Run("platform", func(t *testing.T) {
 		for _, ats := range allAsmTests {
 			ats := ats
@@ -40,9 +41,9 @@ func TestAssembly(t *testing.T) {
 
 				asm := ats.compileToAsm(tt, dir)
 
-				for i, at := range ats.tests {
-					fa := funcAsm(asm, i)
-
+				for _, at := range ats.tests {
+					funcName := nameRegexp.FindString(at.function)[5:]
+					fa := funcAsm(asm, funcName)
 					at.verifyAsm(tt, fa)
 				}
 			})
@@ -50,13 +51,13 @@ func TestAssembly(t *testing.T) {
 	})
 }
 
-// funcAsm returns the assembly listing for f{funcIndex}
-func funcAsm(asm string, funcIndex int) string {
-	if i := strings.Index(asm, fmt.Sprintf("TEXT\t\"\".f%d(SB)", funcIndex)); i >= 0 {
+// funcAsm returns the assembly listing for the given function name.
+func funcAsm(asm string, funcName string) string {
+	if i := strings.Index(asm, fmt.Sprintf("TEXT\t\"\".%s(SB)", funcName)); i >= 0 {
 		asm = asm[i:]
 	}
 
-	if i := strings.Index(asm, fmt.Sprintf("TEXT\t\"\".f%d(SB)", funcIndex+1)); i >= 0 {
+	if i := strings.Index(asm[1:], "TEXT\t\"\"."); i >= 0 {
 		asm = asm[:i+1]
 	}
 
@@ -148,6 +149,7 @@ func (ats *asmTests) runGo(t *testing.T, args ...string) string {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		fmt.Printf(stdout.String())
 		t.Fatalf("error running cmd: %v", err)
 	}
 
@@ -162,7 +164,7 @@ var allAsmTests = []*asmTests{
 	{
 		arch:    "amd64",
 		os:      "linux",
-		imports: []string{"encoding/binary"},
+		imports: []string{"encoding/binary", "math/bits"},
 		tests:   linuxAMD64Tests,
 	},
 	{
@@ -174,18 +176,31 @@ var allAsmTests = []*asmTests{
 	{
 		arch:    "s390x",
 		os:      "linux",
-		imports: []string{"encoding/binary"},
+		imports: []string{"encoding/binary", "math/bits"},
 		tests:   linuxS390XTests,
 	},
 	{
-		arch:  "arm",
-		os:    "linux",
-		tests: linuxARMTests,
+		arch:    "arm",
+		os:      "linux",
+		imports: []string{"math/bits"},
+		tests:   linuxARMTests,
 	},
 	{
-		arch:  "arm64",
+		arch:    "arm64",
+		os:      "linux",
+		imports: []string{"math/bits"},
+		tests:   linuxARM64Tests,
+	},
+	{
+		arch:    "mips",
+		os:      "linux",
+		imports: []string{"math/bits"},
+		tests:   linuxMIPSTests,
+	},
+	{
+		arch:  "ppc64le",
 		os:    "linux",
-		tests: linuxARM64Tests,
+		tests: linuxPPC64LETests,
 	},
 }
 
@@ -460,11 +475,11 @@ var linuxAMD64Tests = []*asmTest{
 	// Rotate after inlining (see issue 18254).
 	{
 		`
-		func g(x uint32, k uint) uint32 {
-			return x<<k | x>>(32-k)
-		}
 		func f32(x uint32) uint32 {
 			return g(x, 7)
+		}
+		func g(x uint32, k uint) uint32 {
+			return x<<k | x>>(32-k)
 		}
 		`,
 		[]string{"\tROLL\t[$]7,"},
@@ -542,6 +557,167 @@ var linuxAMD64Tests = []*asmTest{
 		}
 		`,
 		[]string{"\tBTQ\t\\$60"},
+	},
+	// Intrinsic tests for math/bits
+	{
+		`
+		func f41(a uint64) int {
+			return bits.TrailingZeros64(a)
+		}
+		`,
+		[]string{"\tBSFQ\t", "\tMOVQ\t\\$64,", "\tCMOVQEQ\t"},
+	},
+	{
+		`
+		func f42(a uint32) int {
+			return bits.TrailingZeros32(a)
+		}
+		`,
+		[]string{"\tBSFQ\t", "\tORQ\t[^$]", "\tMOVQ\t\\$4294967296,"},
+	},
+	{
+		`
+		func f43(a uint16) int {
+			return bits.TrailingZeros16(a)
+		}
+		`,
+		[]string{"\tBSFQ\t", "\tORQ\t\\$65536,"},
+	},
+	{
+		`
+		func f44(a uint8) int {
+			return bits.TrailingZeros8(a)
+		}
+		`,
+		[]string{"\tBSFQ\t", "\tORQ\t\\$256,"},
+	},
+	{
+		`
+		func f45(a uint64) uint64 {
+			return bits.ReverseBytes64(a)
+		}
+		`,
+		[]string{"\tBSWAPQ\t"},
+	},
+	{
+		`
+		func f46(a uint32) uint32 {
+			return bits.ReverseBytes32(a)
+		}
+		`,
+		[]string{"\tBSWAPL\t"},
+	},
+	{
+		`
+		func f47(a uint16) uint16 {
+			return bits.ReverseBytes16(a)
+		}
+		`,
+		[]string{"\tROLW\t\\$8,"},
+	},
+	{
+		`
+		func f48(a uint64) int {
+			return bits.Len64(a)
+		}
+		`,
+		[]string{"\tBSRQ\t"},
+	},
+	{
+		`
+		func f49(a uint32) int {
+			return bits.Len32(a)
+		}
+		`,
+		[]string{"\tBSRQ\t"},
+	},
+	{
+		`
+		func f50(a uint16) int {
+			return bits.Len16(a)
+		}
+		`,
+		[]string{"\tBSRQ\t"},
+	},
+	/* see ssa.go
+	{
+		`
+		func f51(a uint8) int {
+			return bits.Len8(a)
+		}
+		`,
+		[]string{"\tBSRQ\t"},
+	},
+	*/
+	{
+		`
+		func f52(a uint) int {
+			return bits.Len(a)
+		}
+		`,
+		[]string{"\tBSRQ\t"},
+	},
+	{
+		`
+		func f53(a uint64) int {
+			return bits.LeadingZeros64(a)
+		}
+		`,
+		[]string{"\tBSRQ\t"},
+	},
+	{
+		`
+		func f54(a uint32) int {
+			return bits.LeadingZeros32(a)
+		}
+		`,
+		[]string{"\tBSRQ\t"},
+	},
+	{
+		`
+		func f55(a uint16) int {
+			return bits.LeadingZeros16(a)
+		}
+		`,
+		[]string{"\tBSRQ\t"},
+	},
+	/* see ssa.go
+	{
+		`
+		func f56(a uint8) int {
+			return bits.LeadingZeros8(a)
+		}
+		`,
+		[]string{"\tBSRQ\t"},
+	},
+	*/
+	{
+		`
+		func f57(a uint) int {
+			return bits.LeadingZeros(a)
+		}
+		`,
+		[]string{"\tBSRQ\t"},
+	},
+	// see issue 19595.
+	// We want to merge load+op in f58, but not in f59.
+	{
+		`
+		func f58(p, q *int) {
+			x := *p
+			*q += x
+		}`,
+		[]string{"\tADDQ\t\\("},
+	},
+	{
+		`
+		func f59(p, q *int) {
+			x := *p
+			for i := 0; i < 10; i++ {
+				*q += x
+			}
+		}`,
+		[]string{"\tADDQ\t[A-Z]"},
 	},
 }
 
@@ -710,6 +886,136 @@ var linuxS390XTests = []*asmTest{
 		`,
 		[]string{"\tFMSUBS\t"},
 	},
+	// Intrinsic tests for math/bits
+	{
+		`
+		func f18(a uint64) int {
+			return bits.TrailingZeros64(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
+	{
+		`
+		func f19(a uint32) int {
+			return bits.TrailingZeros32(a)
+		}
+		`,
+		[]string{"\tFLOGR\t", "\tMOVWZ\t"},
+	},
+	{
+		`
+		func f20(a uint16) int {
+			return bits.TrailingZeros16(a)
+		}
+		`,
+		[]string{"\tFLOGR\t", "\tOR\t\\$65536,"},
+	},
+	{
+		`
+		func f21(a uint8) int {
+			return bits.TrailingZeros8(a)
+		}
+		`,
+		[]string{"\tFLOGR\t", "\tOR\t\\$256,"},
+	},
+	// Intrinsic tests for math/bits
+	{
+		`
+		func f22(a uint64) uint64 {
+			return bits.ReverseBytes64(a)
+		}
+		`,
+		[]string{"\tMOVDBR\t"},
+	},
+	{
+		`
+		func f23(a uint32) uint32 {
+			return bits.ReverseBytes32(a)
+		}
+		`,
+		[]string{"\tMOVWBR\t"},
+	},
+	{
+		`
+		func f24(a uint64) int {
+			return bits.Len64(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
+	{
+		`
+		func f25(a uint32) int {
+			return bits.Len32(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
+	{
+		`
+		func f26(a uint16) int {
+			return bits.Len16(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
+	{
+		`
+		func f27(a uint8) int {
+			return bits.Len8(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
+	{
+		`
+		func f28(a uint) int {
+			return bits.Len(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
+	{
+		`
+		func f29(a uint64) int {
+			return bits.LeadingZeros64(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
+	{
+		`
+		func f30(a uint32) int {
+			return bits.LeadingZeros32(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
+	{
+		`
+		func f31(a uint16) int {
+			return bits.LeadingZeros16(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
+	{
+		`
+		func f32(a uint8) int {
+			return bits.LeadingZeros8(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
+	{
+		`
+		func f33(a uint) int {
+			return bits.LeadingZeros(a)
+		}
+		`,
+		[]string{"\tFLOGR\t"},
+	},
 }
 
 var linuxARMTests = []*asmTest{
@@ -736,6 +1042,86 @@ var linuxARMTests = []*asmTest{
 		}
 		`,
 		[]string{"\tMOVW\tR[0-9]+@>25,"},
+	},
+	{
+		`
+		func f3(a uint64) int {
+			return bits.Len64(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f4(a uint32) int {
+			return bits.Len32(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f5(a uint16) int {
+			return bits.Len16(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f6(a uint8) int {
+			return bits.Len8(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f7(a uint) int {
+			return bits.Len(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f8(a uint64) int {
+			return bits.LeadingZeros64(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f9(a uint32) int {
+			return bits.LeadingZeros32(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f10(a uint16) int {
+			return bits.LeadingZeros16(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f11(a uint8) int {
+			return bits.LeadingZeros8(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f12(a uint) int {
+			return bits.LeadingZeros(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
 	},
 }
 
@@ -787,6 +1173,221 @@ var linuxARM64Tests = []*asmTest{
 		}
 		`,
 		[]string{"\tRORW\t[$]25,"},
+	},
+	{
+		`
+		func f22(a uint64) uint64 {
+			return bits.ReverseBytes64(a)
+		}
+		`,
+		[]string{"\tREV\t"},
+	},
+	{
+		`
+		func f23(a uint32) uint32 {
+			return bits.ReverseBytes32(a)
+		}
+		`,
+		[]string{"\tREVW\t"},
+	},
+	{
+		`
+		func f24(a uint64) int {
+			return bits.Len64(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f25(a uint32) int {
+			return bits.Len32(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f26(a uint16) int {
+			return bits.Len16(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f27(a uint8) int {
+			return bits.Len8(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f28(a uint) int {
+			return bits.Len(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f29(a uint64) int {
+			return bits.LeadingZeros64(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f30(a uint32) int {
+			return bits.LeadingZeros32(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f31(a uint16) int {
+			return bits.LeadingZeros16(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f32(a uint8) int {
+			return bits.LeadingZeros8(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f33(a uint) int {
+			return bits.LeadingZeros(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+}
+
+var linuxMIPSTests = []*asmTest{
+	{
+		`
+		func f0(a uint64) int {
+			return bits.Len64(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f1(a uint32) int {
+			return bits.Len32(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f2(a uint16) int {
+			return bits.Len16(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f3(a uint8) int {
+			return bits.Len8(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f4(a uint) int {
+			return bits.Len(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f5(a uint64) int {
+			return bits.LeadingZeros64(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f6(a uint32) int {
+			return bits.LeadingZeros32(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f7(a uint16) int {
+			return bits.LeadingZeros16(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f8(a uint8) int {
+			return bits.LeadingZeros8(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+	{
+		`
+		func f9(a uint) int {
+			return bits.LeadingZeros(a)
+		}
+		`,
+		[]string{"\tCLZ\t"},
+	},
+}
+
+var linuxPPC64LETests = []*asmTest{
+	// Fused multiply-add/sub instructions.
+	{
+		`
+		func f0(x, y, z float64) float64 {
+			return x * y + z
+		}
+		`,
+		[]string{"\tFMADD\t"},
+	},
+	{
+		`
+		func f1(x, y, z float64) float64 {
+			return x * y - z
+		}
+		`,
+		[]string{"\tFMSUB\t"},
+	},
+	{
+		`
+		func f2(x, y, z float32) float32 {
+			return x * y + z
+		}
+		`,
+		[]string{"\tFMADDS\t"},
+	},
+	{
+		`
+		func f3(x, y, z float32) float32 {
+			return x * y - z
+		}
+		`,
+		[]string{"\tFMSUBS\t"},
 	},
 }
 
