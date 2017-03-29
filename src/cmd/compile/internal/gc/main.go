@@ -371,11 +371,6 @@ func Main(archInit func(*Arch)) {
 	timings.Start("fe", "loadsys")
 	loadsys()
 
-	if flag_remote {
-		timings.Start("fe", "remote:analyze")
-		analyzeRemote(flag.Args())
-	}
-
 	timings.Start("fe", "parse")
 	lines := parseFiles(flag.Args())
 	timings.Stop()
@@ -512,6 +507,14 @@ func Main(archInit func(*Arch)) {
 			}
 		}
 
+		if flag_remote {
+			// Phase 7a: Concurrency escape analysis.
+			// Required for moving heap allocations of variables that cross
+			// goroutines to remote allocations.
+			timings.Start("fe", "remote")
+			escapesRemote(flag.Args(), xtop)
+		}
+
 		// Prepare for SSA compilation.
 		// This must be before peekitabs, because peekitabs
 		// can trigger function compilation.
@@ -522,13 +525,6 @@ func Main(archInit func(*Arch)) {
 		// can be de-virtualized during compilation.
 		Curfn = nil
 		peekitabs()
-
-		if flag_remote {
-			// Phase 7a: Concurrency escape analysis.
-			// Required for moving heap allocations of variables that cross
-			// goroutines to remote allocations.
-			escapesRemote(xtop)
-		}
 
 		// Phase 8: Compile top level functions.
 		// Don't use range--walk can add functions to xtop.

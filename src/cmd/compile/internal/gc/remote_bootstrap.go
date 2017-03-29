@@ -12,6 +12,4 @@ package gc
 // set by command line flag -remote
 var flag_remote bool
 
-func analyzeRemote([]string) {}
-func globalRemote([]*Node)   {}
-func escapesRemote([]*Node)  {}
+func escapesRemote([]string, []*Node) {}

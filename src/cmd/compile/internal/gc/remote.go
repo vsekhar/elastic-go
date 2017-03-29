@@ -10,52 +10,80 @@ import (
 	"log"
 
 	"golang.org/x/tools/go/loader"
+	"golang.org/x/tools/go/pointer"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
 )
 
 // set by command line flag -remote
 var flag_remote bool
 
-// Identifies pointers that leak addresses across goroutines:
-//  - Pointers sent/received over channels
-//  - Pointers passed as arguments into go function calls
-//  - Pointers passed as method receivers into go function calls
-//  - Pointers passed as free variables into closures
-//
-// Then identifies using points-to analysis all allocation sites to which each
-// of those pointers may point and tags them for remote allocation:
-//  - Explicit allocation via var
-//  - Explicit allocation via new
-//  - Variables whose address is taken (&var) and corresponding allocation site
-//  - Allocation of function arguments
-func analyzeRemote(args []string) {
+// Traverses program and finds all ssa.Value's that are the roots to `go`
+// keyword function calls
+func findGoRoots(prog *ssa.Program) []*ssa.Value {
+	// TBD
+	return nil
+}
+
+func escapesRemote(args []string, all []*Node) {
+	// Compile SSA
 	var conf loader.Config
 	rest, err := conf.FromArgs(args, false) // no tests
 	if err != nil {
-		log.Fatalf("remote:analyse: %v", err)
+		log.Fatalf("remote:analyze: %v", err)
 	}
 	if len(rest) != 0 {
 		log.Fatalf("remote:analyze: unused args %v", rest)
 	}
-	_, err = conf.Load()
-}
-
-func globalRemote(all []*Node) {
-	// 1. build call graph
-	// 2. Populate list of goroutine "root" functions
-	// 3. Find all OPROC calls and add callees to root functions
-	// 4. Assign number to each goroutine root (array index?)
-	// 5. Go through call graph and tag functions with goroutine root numbers
-	// 6. Go through call graph and tag PEXTERN vars with goroutine root numbers
-	// 7. Go through PEXTERN vars, relable those with multiple goroutine root numbers as PAUTOREMOTE
-}
-
-func escapesRemote(all []*Node) {
-	// TODO(vsekhar): use visitBottomUp and other helpers from esc.go
-	// visitBottomUp calls analyze() with a set of functions that only call
-	// each other or previously analyze'd functions. Useful?
-
-	if Debug_remote > 0 {
-		dumplist("remote: ", Nodes{&all})
+	iprog, err := conf.Load()
+	if err != nil {
+		log.Fatalf("remote:analyze: %v", err)
 	}
-	globalRemote(all)
+	prog := ssautil.CreateProgram(iprog, 0)
+
+	// Find all function expressions at `go` call sites
+	// TBD
+
+	// Pointer analysis #1: query for all possible functions called at `go`
+	// call sites; also generate callgraph
+	mainPkg := prog.Package(iprog.Created[0].Pkg)
+	prog.Build()
+	config := &pointer.Config{
+		Mains:          []*ssa.Package{mainPkg},
+		BuildCallGraph: true,
+	}
+	r1, err := pointer.Analyze(config)
+	cg := r1.CallGraph
+	_ = cg
+
+	// Using call graph:
+	//  - Find all pointer-like vars transiting `go` function calls
+	//    (as arguments, method receivers or free variables)
+	//  - Find all pointer-like global vars accessed across `go` function calls
+	//  - Find all vars sent/received over channels
+
+	// Pointer analysis #2: query above pointer-like vars for allocation sites
+
+	// Map to xtop syntax tree
+	// Re-write allocation sites for remote allocation
+	// Re-write access sites
+
+	// Resources
+	// ---------
+
+	// Call graph edge traversal:
+	// result, err := pointer.Analyze(config)
+	// var edges []string
+	// callgraph.GraphVisitEdges(result.CallGraph, func(edge *callgraph.Edge) error {
+	// 	caller := edge.Caller.Func
+	// 	if caller.Pkg == mainPkg {
+	// 		edges = append(edges, fmt.Sprint(caller, " --> ", edge.Callee.Func))
+	// 	}
+	// 	return nil
+	// })
+
+	// parse tree output:
+	// if Debug_remote > 0 {
+	// 	dumplist("remote: ", Nodes{&all})
+	// }
 }
