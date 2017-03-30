@@ -7,8 +7,10 @@
 package gc
 
 import (
+	"bytes"
 	"log"
 
+	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/loader"
 	"golang.org/x/tools/go/pointer"
 	"golang.org/x/tools/go/ssa"
@@ -18,11 +20,17 @@ import (
 // set by command line flag -remote
 var flag_remote bool
 
-// Traverses program and finds all ssa.Value's that are the roots to `go`
-// keyword function calls
-func findGoRoots(prog *ssa.Program) []*ssa.Value {
-	// TBD
-	return nil
+func logPkg(pkg *ssa.Package) {
+	buf := new(bytes.Buffer)
+	ssa.WritePackage(buf, pkg)
+	log.Printf("remote:analyze Package: \n%s", buf)
+	for n, m := range pkg.Members {
+		if f, ok := m.(*ssa.Function); ok {
+			buf.Reset()
+			ssa.WriteFunction(buf, f)
+			log.Printf("  Function (%s): \n%s", n, buf)
+		}
+	}
 }
 
 func escapesRemote(args []string, all []*Node) {
@@ -39,22 +47,107 @@ func escapesRemote(args []string, all []*Node) {
 	if err != nil {
 		log.Fatalf("remote:analyze: %v", err)
 	}
+	fset := iprog.Fset
 	prog := ssautil.CreateProgram(iprog, 0)
-
-	// Find all function expressions at `go` call sites
-	// TBD
-
-	// Pointer analysis #1: query for all possible functions called at `go`
-	// call sites; also generate callgraph
 	mainPkg := prog.Package(iprog.Created[0].Pkg)
 	prog.Build()
+
+	if Debug_remote > 0 {
+		logPkg(mainPkg)
+	}
+
+	// Build call graph
 	config := &pointer.Config{
 		Mains:          []*ssa.Package{mainPkg},
 		BuildCallGraph: true,
 	}
 	r1, err := pointer.Analyze(config)
 	cg := r1.CallGraph
-	_ = cg
+
+	// Find all go call sites (gosites) and their possible callees.
+	gosites := make(map[ssa.CallInstruction][]*callgraph.Edge)
+	callgraph.GraphVisitEdges(cg, func(edge *callgraph.Edge) error {
+		if _, ok := edge.Site.(*ssa.Go); ok {
+			gosites[edge.Site] = append(gosites[edge.Site], edge)
+		}
+		return nil
+	})
+
+	if Debug_remote > 0 {
+		for site, edges := range gosites {
+			for _, edge := range edges {
+				log.Printf("remote: analyse: 'go' call site at %v --> %v", fset.Position(site.Pos()), edge.Callee)
+			}
+		}
+	}
+
+	// asyncFuncs are any functions that may run asynchronously to the 'root'
+	// goroutine. They are all functions downstream of the gosites found above.
+	asyncFuncs := make(map[*callgraph.Node]struct{})
+	var visit func(*callgraph.Node)
+	visit = func(n *callgraph.Node) {
+		if _, ok := asyncFuncs[n]; !ok {
+			asyncFuncs[n] = struct{}{}
+			for _, next := range n.Out {
+				visit(next.Callee)
+			}
+		}
+	}
+	for _, edges := range gosites {
+		for _, edge := range edges {
+			visit(edge.Callee)
+		}
+	}
+
+	if Debug_remote > 0 {
+		for af, _ := range asyncFuncs {
+			log.Printf("remote: analyse: async func %v", af)
+		}
+	}
+
+	// Any references to a global among the asyncFuncs results in that
+	// global receiving remote allocation.
+	remoteGlobals := make(map[*ssa.Global]struct{}, 0)
+	operands := make([]*ssa.Value, 0)
+	scanBlock := func(blk *ssa.BasicBlock) {
+		if blk == nil {
+			return
+		}
+		for _, inst := range blk.Instrs {
+			operands = inst.Operands(operands[:0])
+			for _, o := range operands {
+				if g, ok := (*o).(*ssa.Global); ok {
+					remoteGlobals[g] = struct{}{}
+				}
+			}
+		}
+	}
+	var scanFunc func(*ssa.Function)
+	scanFunc = func(f *ssa.Function) {
+		for _, blk := range f.Blocks {
+			scanBlock(blk)
+		}
+		scanBlock(f.Recover)
+		for _, af := range f.AnonFuncs {
+			scanFunc(af)
+		}
+	}
+	for n, _ := range asyncFuncs {
+		scanFunc(n.Func)
+	}
+
+	if Debug_remote > 0 {
+		for rg, _ := range remoteGlobals {
+			log.Printf("remote: analyse: global for remote allocation: %v", rg)
+		}
+	}
+
+	// In SSA form, instructions have Operands (*ssa.Value's) and ssa.Value's
+	// have Referrers (*ssa.Instructions). However globals (named functions and
+	// global variables) are not populated with Referrers, so we need to build
+	// a list of referrers for globals here.
+	// referrersToGlobals := make(map[*ssa.Global][]ssa.Instruction)
+	// visited := make(map[*callgraph.Node]struct{})
 
 	// Using call graph:
 	//  - Find all pointer-like vars transiting `go` function calls

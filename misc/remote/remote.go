@@ -19,8 +19,23 @@ func main() {
 	var2 = 1
 	g(0)
 	done := make(chan struct{})
-	go h(0, done)
+
+	// Some gymnastics to exercise the static analysis
+	type functionHolder struct {
+		fs []func(int, chan struct{})
+	}
+	fh := new(functionHolder)
+	fh.fs = append(fh.fs,
+		func(int, chan struct{}) {},
+		h,
+		func(int, chan struct{}) {},
+	)
+	getFunc := func(i int) func(int, chan struct{}) {
+		return fh.fs[i]
+	}
+	go getFunc(var1)(0, done)
 	<-done
+
 	fmt.Printf("var1: %d\n", var1)
 	fmt.Printf("var2: %d\n", var2)
 	fmt.Printf("var3: %d\n", var3)
