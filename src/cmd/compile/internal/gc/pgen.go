@@ -6,92 +6,31 @@ package gc
 
 import (
 	"cmd/compile/internal/ssa"
+	"cmd/compile/internal/types"
 	"cmd/internal/dwarf"
 	"cmd/internal/obj"
+	"cmd/internal/objabi"
 	"cmd/internal/src"
 	"cmd/internal/sys"
 	"fmt"
+	"math/rand"
 	"sort"
+	"sync"
 )
 
 // "Portable" code generation.
 
-var makefuncdatasym_nsym int
-
-func makefuncdatasym(pp *Progs, nameprefix string, funcdatakind int64) *Sym {
-	sym := lookupN(nameprefix, makefuncdatasym_nsym)
-	makefuncdatasym_nsym++
-	p := pp.Prog(obj.AFUNCDATA)
-	Addrconst(&p.From, funcdatakind)
-	p.To.Type = obj.TYPE_MEM
-	p.To.Name = obj.NAME_EXTERN
-	p.To.Sym = Linksym(sym)
-	return sym
-}
-
-// TODO(mdempsky): Update to reference OpVar{Def,Kill,Live} instead
-// and move to plive.go.
-
-// VARDEF is an annotation for the liveness analysis, marking a place
-// where a complete initialization (definition) of a variable begins.
-// Since the liveness analysis can see initialization of single-word
-// variables quite easy, gvardef is usually only called for multi-word
-// or 'fat' variables, those satisfying isfat(n->type).
-// However, gvardef is also called when a non-fat variable is initialized
-// via a block move; the only time this happens is when you have
-//	return f()
-// for a function with multiple return values exactly matching the return
-// types of the current function.
-//
-// A 'VARDEF x' annotation in the instruction stream tells the liveness
-// analysis to behave as though the variable x is being initialized at that
-// point in the instruction stream. The VARDEF must appear before the
-// actual (multi-instruction) initialization, and it must also appear after
-// any uses of the previous value, if any. For example, if compiling:
-//
-//	x = x[1:]
-//
-// it is important to generate code like:
-//
-//	base, len, cap = pieces of x[1:]
-//	VARDEF x
-//	x = {base, len, cap}
-//
-// If instead the generated code looked like:
-//
-//	VARDEF x
-//	base, len, cap = pieces of x[1:]
-//	x = {base, len, cap}
-//
-// then the liveness analysis would decide the previous value of x was
-// unnecessary even though it is about to be used by the x[1:] computation.
-// Similarly, if the generated code looked like:
-//
-//	base, len, cap = pieces of x[1:]
-//	x = {base, len, cap}
-//	VARDEF x
-//
-// then the liveness analysis will not preserve the new value of x, because
-// the VARDEF appears to have "overwritten" it.
-//
-// VARDEF is a bit of a kludge to work around the fact that the instruction
-// stream is working on single-word values but the liveness analysis
-// wants to work on individual variables, which might be multi-word
-// aggregates. It might make sense at some point to look into letting
-// the liveness analysis work on single-word values as well, although
-// there are complications around interface values, slices, and strings,
-// all of which cannot be treated as individual words.
-//
-// VARKILL is the opposite of VARDEF: it marks a value as no longer needed,
-// even if its address has been taken. That is, a VARKILL annotation asserts
-// that its argument is certainly dead, for use when the liveness analysis
-// would not otherwise be able to deduce that fact.
+var (
+	nBackendWorkers int     // number of concurrent backend workers, set by a compiler flag
+	compilequeue    []*Node // functions waiting to be compiled
+)
 
 func emitptrargsmap() {
-	if Curfn.Func.Nname.Sym.Name == "_" {
+	if Curfn.funcname() == "_" {
 		return
 	}
-	sym := lookup(fmt.Sprintf("%s.args_stackmap", Curfn.Func.Nname.Sym.Name))
+	sym := lookup(fmt.Sprintf("%s.args_stackmap", Curfn.funcname()))
+	lsym := sym.Linksym()
 
 	nptr := int(Curfn.Type.ArgWidth() / int64(Widthptr))
 	bv := bvalloc(int32(nptr) * 2)
@@ -99,8 +38,8 @@ func emitptrargsmap() {
 	if Curfn.Type.Results().NumFields() > 0 {
 		nbitmap = 2
 	}
-	off := duint32(sym, 0, uint32(nbitmap))
-	off = duint32(sym, off, uint32(bv.n))
+	off := duint32(lsym, 0, uint32(nbitmap))
+	off = duint32(lsym, off, uint32(bv.n))
 	var xoffset int64
 	if Curfn.IsMethod() {
 		xoffset = 0
@@ -112,14 +51,14 @@ func emitptrargsmap() {
 		onebitwalktype1(Curfn.Type.Params(), &xoffset, bv)
 	}
 
-	off = dbvec(sym, off, bv)
+	off = dbvec(lsym, off, bv)
 	if Curfn.Type.Results().NumFields() > 0 {
 		xoffset = 0
 		onebitwalktype1(Curfn.Type.Results(), &xoffset, bv)
-		off = dbvec(sym, off, bv)
+		off = dbvec(lsym, off, bv)
 	}
 
-	ggloblsym(sym, int32(off), obj.RODATA|obj.LOCAL)
+	ggloblsym(lsym, int32(off), obj.RODATA|obj.LOCAL)
 }
 
 // cmpstackvarlt reports whether the stack variable a sorts before b.
@@ -133,20 +72,20 @@ func emitptrargsmap() {
 // the top of the stack and increasing in size.
 // Non-autos sort on offset.
 func cmpstackvarlt(a, b *Node) bool {
-	if (a.Class == PAUTO) != (b.Class == PAUTO) {
-		return b.Class == PAUTO
+	if (a.Class() == PAUTO) != (b.Class() == PAUTO) {
+		return b.Class() == PAUTO
 	}
 
-	if a.Class != PAUTO {
+	if a.Class() != PAUTO {
 		return a.Xoffset < b.Xoffset
 	}
 
-	if a.Used() != b.Used() {
-		return a.Used()
+	if a.Name.Used() != b.Name.Used() {
+		return a.Name.Used()
 	}
 
-	ap := haspointers(a.Type)
-	bp := haspointers(b.Type)
+	ap := types.Haspointers(a.Type)
+	bp := types.Haspointers(b.Type)
 	if ap != bp {
 		return ap
 	}
@@ -171,8 +110,6 @@ func (s byStackVar) Len() int           { return len(s) }
 func (s byStackVar) Less(i, j int) bool { return cmpstackvarlt(s[i], s[j]) }
 func (s byStackVar) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 
-var scratchFpMem *Node
-
 func (s *ssafn) AllocFrame(f *ssa.Func) {
 	s.stksize = 0
 	s.stkptrsize = 0
@@ -180,16 +117,15 @@ func (s *ssafn) AllocFrame(f *ssa.Func) {
 
 	// Mark the PAUTO's unused.
 	for _, ln := range fn.Dcl {
-		if ln.Class == PAUTO {
-			ln.SetUsed(false)
+		if ln.Class() == PAUTO {
+			ln.Name.SetUsed(false)
 		}
 	}
 
 	for _, l := range f.RegAlloc {
 		if ls, ok := l.(ssa.LocalSlot); ok {
-			ls.N.(*Node).SetUsed(true)
+			ls.N.(*Node).Name.SetUsed(true)
 		}
-
 	}
 
 	scratchUsed := false
@@ -197,9 +133,13 @@ func (s *ssafn) AllocFrame(f *ssa.Func) {
 		for _, v := range b.Values {
 			switch a := v.Aux.(type) {
 			case *ssa.ArgSymbol:
-				a.Node.(*Node).SetUsed(true)
+				n := a.Node.(*Node)
+				// Don't modify nodfp; it is a global.
+				if n != nodfp {
+					n.Name.SetUsed(true)
+				}
 			case *ssa.AutoSymbol:
-				a.Node.(*Node).SetUsed(true)
+				a.Node.(*Node).Name.SetUsed(true)
 			}
 
 			if !scratchUsed {
@@ -208,19 +148,18 @@ func (s *ssafn) AllocFrame(f *ssa.Func) {
 		}
 	}
 
-	if f.Config.NeedsFpScratch {
-		scratchFpMem = tempAt(src.NoXPos, s.curfn, Types[TUINT64])
-		scratchFpMem.SetUsed(scratchUsed)
+	if f.Config.NeedsFpScratch && scratchUsed {
+		s.scratchFpMem = tempAt(src.NoXPos, s.curfn, types.Types[TUINT64])
 	}
 
 	sort.Sort(byStackVar(fn.Dcl))
 
 	// Reassign stack offsets of the locals that are used.
 	for i, n := range fn.Dcl {
-		if n.Op != ONAME || n.Class != PAUTO {
+		if n.Op != ONAME || n.Class() != PAUTO {
 			continue
 		}
-		if !n.Used() {
+		if !n.Name.Used() {
 			fn.Dcl = fn.Dcl[:i]
 			break
 		}
@@ -232,16 +171,12 @@ func (s *ssafn) AllocFrame(f *ssa.Func) {
 		}
 		s.stksize += w
 		s.stksize = Rnd(s.stksize, int64(n.Type.Align))
-		if haspointers(n.Type) {
+		if types.Haspointers(n.Type) {
 			s.stkptrsize = s.stksize
 		}
 		if thearch.LinkArch.InFamily(sys.MIPS, sys.MIPS64, sys.ARM, sys.ARM64, sys.PPC64, sys.S390X) {
 			s.stksize = Rnd(s.stksize, int64(Widthptr))
 		}
-		if s.stksize >= 1<<31 {
-			yyerrorl(s.curfn.Pos, "stack frame too large (>2GB)")
-		}
-
 		n.Xoffset = -s.stksize
 	}
 
@@ -250,25 +185,6 @@ func (s *ssafn) AllocFrame(f *ssa.Func) {
 }
 
 func compile(fn *Node) {
-	if Newproc == nil {
-		Newproc = Sysfunc("newproc")
-		Deferproc = Sysfunc("deferproc")
-		Deferreturn = Sysfunc("deferreturn")
-		Duffcopy = Sysfunc("duffcopy")
-		Duffzero = Sysfunc("duffzero")
-		panicindex = Sysfunc("panicindex")
-		panicslice = Sysfunc("panicslice")
-		panicdivide = Sysfunc("panicdivide")
-		growslice = Sysfunc("growslice")
-		panicdottypeE = Sysfunc("panicdottypeE")
-		panicdottypeI = Sysfunc("panicdottypeI")
-		panicnildottype = Sysfunc("panicnildottype")
-		assertE2I = Sysfunc("assertE2I")
-		assertE2I2 = Sysfunc("assertE2I2")
-		assertI2I = Sysfunc("assertI2I")
-		assertI2I2 = Sysfunc("assertI2I2")
-	}
-
 	Curfn = fn
 	dowidth(fn.Type)
 
@@ -288,39 +204,101 @@ func compile(fn *Node) {
 	if nerrors != 0 {
 		return
 	}
-	checkcontrolflow(fn)
-	if nerrors != 0 {
-		return
-	}
 	if instrumenting {
 		instrument(fn)
-	}
-	if nerrors != 0 {
-		return
 	}
 
 	// From this point, there should be no uses of Curfn. Enforce that.
 	Curfn = nil
 
-	// Build an SSA backend function.
-	ssafn := buildssa(fn)
-	if nerrors != 0 {
-		return
-	}
+	// Set up the function's LSym early to avoid data races with the assemblers.
+	fn.Func.initLSym()
 
+	if compilenow() {
+		compileSSA(fn, 0)
+	} else {
+		compilequeue = append(compilequeue, fn)
+	}
+}
+
+// compilenow reports whether to compile immediately.
+// If functions are not compiled immediately,
+// they are enqueued in compilequeue,
+// which is drained by compileFunctions.
+func compilenow() bool {
+	return nBackendWorkers == 1
+}
+
+// compileSSA builds an SSA backend function,
+// uses it to generate a plist,
+// and flushes that plist to machine code.
+// worker indicates which of the backend workers is doing the processing.
+func compileSSA(fn *Node, worker int) {
+	ssafn := buildssa(fn, worker)
 	if flag_remote {
 		// TODO(vsekhar): Rewrite accesses to remote vars in SSA
 		// (analysis is done over the whole program parse tree earlier)
 	}
-	pp := newProgs(fn)
+	pp := newProgs(fn, worker)
 	genssa(ssafn, pp)
+	if pp.Text.To.Offset < 1<<31 {
+		pp.Flush()
+	} else {
+		largeStackFramesMu.Lock()
+		largeStackFrames = append(largeStackFrames, fn.Pos)
+		largeStackFramesMu.Unlock()
+	}
+	// fieldtrack must be called after pp.Flush. See issue 20014.
 	fieldtrack(pp.Text.From.Sym, fn.Func.FieldTrack)
-	pp.Flush()
+	pp.Free()
+}
+
+// compileFunctions compiles all functions in compilequeue.
+// It fans out nBackendWorkers to do the work
+// and waits for them to complete.
+func compileFunctions() {
+	if len(compilequeue) != 0 {
+		sizeCalculationDisabled = true // not safe to calculate sizes concurrently
+		if raceEnabled {
+			// Randomize compilation order to try to shake out races.
+			tmp := make([]*Node, len(compilequeue))
+			perm := rand.Perm(len(compilequeue))
+			for i, v := range perm {
+				tmp[v] = compilequeue[i]
+			}
+			copy(compilequeue, tmp)
+		} else {
+			// Compile the longest functions first,
+			// since they're most likely to be the slowest.
+			// This helps avoid stragglers.
+			obj.SortSlice(compilequeue, func(i, j int) bool {
+				return compilequeue[i].Nbody.Len() > compilequeue[j].Nbody.Len()
+			})
+		}
+		var wg sync.WaitGroup
+		c := make(chan *Node)
+		for i := 0; i < nBackendWorkers; i++ {
+			wg.Add(1)
+			go func(worker int) {
+				for fn := range c {
+					compileSSA(fn, worker)
+				}
+				wg.Done()
+			}(i)
+		}
+		for _, fn := range compilequeue {
+			c <- fn
+		}
+		close(c)
+		compilequeue = nil
+		wg.Wait()
+		sizeCalculationDisabled = false
+	}
 }
 
 func debuginfo(fnsym *obj.LSym, curfn interface{}) []*dwarf.Var {
 	fn := curfn.(*Node)
-	if expect := Linksym(fn.Func.Nname.Sym); fnsym != expect {
+	if expect := fn.Func.Nname.Sym.Linksym(); fnsym != expect {
 		Fatalf("unexpected fnsym: %v != %v", fnsym, expect)
 	}
 
@@ -334,10 +312,10 @@ func debuginfo(fnsym *obj.LSym, curfn interface{}) []*dwarf.Var {
 		var abbrev int
 		offs := n.Xoffset
 
-		switch n.Class {
+		switch n.Class() {
 		case PAUTO:
-			if !n.Used() {
-				continue
+			if !n.Name.Used() {
+				Fatalf("debuginfo unused node (AllocFrame should truncate fn.Func.Dcl)")
 			}
 			name = obj.NAME_AUTO
 
@@ -345,7 +323,7 @@ func debuginfo(fnsym *obj.LSym, curfn interface{}) []*dwarf.Var {
 			if Ctxt.FixedFrameSize() == 0 {
 				offs -= int64(Widthptr)
 			}
-			if obj.Framepointer_enabled(obj.GOOS, obj.GOARCH) {
+			if objabi.Framepointer_enabled(objabi.GOOS, objabi.GOARCH) {
 				offs -= int64(Widthptr)
 			}
 
@@ -359,9 +337,9 @@ func debuginfo(fnsym *obj.LSym, curfn interface{}) []*dwarf.Var {
 			continue
 		}
 
-		gotype := Linksym(ngotype(n))
-		fnsym.Autom = append(fnsym.Autom, &obj.Auto{
-			Asym:    obj.Linklookup(Ctxt, n.Sym.Name, 0),
+		gotype := ngotype(n).Linksym()
+		fnsym.Func.Autom = append(fnsym.Func.Autom, &obj.Auto{
+			Asym:    Ctxt.Lookup(n.Sym.Name),
 			Aoffset: int32(n.Xoffset),
 			Name:    name,
 			Gotype:  gotype,
@@ -376,7 +354,7 @@ func debuginfo(fnsym *obj.LSym, curfn interface{}) []*dwarf.Var {
 			Name:   n.Sym.Name,
 			Abbrev: abbrev,
 			Offset: int32(offs),
-			Type:   obj.Linklookup(Ctxt, typename, 0),
+			Type:   Ctxt.Lookup(typename),
 		})
 	}
 
@@ -388,27 +366,27 @@ func debuginfo(fnsym *obj.LSym, curfn interface{}) []*dwarf.Var {
 
 // fieldtrack adds R_USEFIELD relocations to fnsym to record any
 // struct fields that it used.
-func fieldtrack(fnsym *obj.LSym, tracked map[*Sym]struct{}) {
+func fieldtrack(fnsym *obj.LSym, tracked map[*types.Sym]struct{}) {
 	if fnsym == nil {
 		return
 	}
-	if obj.Fieldtrack_enabled == 0 || len(tracked) == 0 {
+	if objabi.Fieldtrack_enabled == 0 || len(tracked) == 0 {
 		return
 	}
 
-	trackSyms := make([]*Sym, 0, len(tracked))
+	trackSyms := make([]*types.Sym, 0, len(tracked))
 	for sym := range tracked {
 		trackSyms = append(trackSyms, sym)
 	}
 	sort.Sort(symByName(trackSyms))
 	for _, sym := range trackSyms {
 		r := obj.Addrel(fnsym)
-		r.Sym = Linksym(sym)
-		r.Type = obj.R_USEFIELD
+		r.Sym = sym.Linksym()
+		r.Type = objabi.R_USEFIELD
 	}
 }
 
-type symByName []*Sym
+type symByName []*types.Sym
 
 func (a symByName) Len() int           { return len(a) }
 func (a symByName) Less(i, j int) bool { return a[i].Name < a[j].Name }

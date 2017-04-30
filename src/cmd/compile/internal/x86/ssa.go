@@ -443,17 +443,15 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = x
 	case ssa.Op386MOVSSconst1, ssa.Op386MOVSDconst1:
-		var literal string
-		if v.Op == ssa.Op386MOVSDconst1 {
-			literal = fmt.Sprintf("$f64.%016x", uint64(v.AuxInt))
-		} else {
-			literal = fmt.Sprintf("$f32.%08x", math.Float32bits(float32(math.Float64frombits(uint64(v.AuxInt)))))
-		}
 		p := s.Prog(x86.ALEAL)
 		p.From.Type = obj.TYPE_MEM
 		p.From.Name = obj.NAME_EXTERN
-		p.From.Sym = obj.Linklookup(gc.Ctxt, literal, 0)
-		p.From.Sym.Set(obj.AttrLocal, true)
+		f := math.Float64frombits(uint64(v.AuxInt))
+		if v.Op == ssa.Op386MOVSDconst1 {
+			p.From.Sym = gc.Ctxt.Float64Sym(f)
+		} else {
+			p.From.Sym = gc.Ctxt.Float32Sym(float32(f))
+		}
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
 	case ssa.Op386MOVSSconst2, ssa.Op386MOVSDconst2:
@@ -740,6 +738,13 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		}
 	case ssa.Op386FCHS:
 		v.Fatalf("FCHS in non-387 mode")
+	case ssa.OpClobber:
+		p := s.Prog(x86.AMOVL)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 0xdeaddead
+		p.To.Type = obj.TYPE_MEM
+		p.To.Reg = x86.REG_SP
+		gc.AddAux(&p.To, v)
 	default:
 		v.Fatalf("genValue not implemented: %s", v.LongString())
 	}

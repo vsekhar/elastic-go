@@ -28,6 +28,7 @@ import (
 func testEndToEnd(t *testing.T, goarch, file string) {
 	input := filepath.Join("testdata", file+".s")
 	architecture, ctxt := setArch(goarch)
+	architecture.Init(ctxt)
 	lexer := lex.NewLexer(input)
 	parser := NewParser(ctxt, architecture, lexer)
 	pList := new(obj.Plist)
@@ -60,6 +61,11 @@ func testEndToEnd(t *testing.T, goarch, file string) {
 Diff:
 	for _, line := range lines {
 		lineno++
+
+		// Ignore include of textflag.h.
+		if strings.HasPrefix(line, "#include ") {
+			continue
+		}
 
 		// The general form of a test input line is:
 		//	// comment
@@ -179,7 +185,7 @@ Diff:
 		t.Errorf(format, args...)
 		ok = false
 	}
-	obj.FlushplistNoFree(ctxt, pList)
+	obj.Flushplist(ctxt, pList, nil)
 
 	for p := top; p != nil; p = p.Link {
 		if p.As == obj.ATEXT {
@@ -283,7 +289,7 @@ func testErrors(t *testing.T, goarch, file string) {
 		errBuf.WriteString(s)
 	}
 	pList.Firstpc, ok = parser.Parse()
-	obj.Flushplist(ctxt, pList)
+	obj.Flushplist(ctxt, pList, nil)
 	if ok && !failed {
 		t.Errorf("asm: %s had no errors", goarch)
 	}

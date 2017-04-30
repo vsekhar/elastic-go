@@ -642,6 +642,129 @@ func TestHTTP2WriteDeadlineExtendedOnNewRequest(t *testing.T) {
 	}
 }
 
+// tryTimeouts runs testFunc with increasing timeouts. Test passes on first success,
+// and fails if all timeouts fail.
+func tryTimeouts(t *testing.T, testFunc func(timeout time.Duration) error) {
+	tries := []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second}
+	for i, timeout := range tries {
+		err := testFunc(timeout)
+		if err == nil {
+			return
+		}
+		t.Logf("failed at %v: %v", timeout, err)
+		if i != len(tries)-1 {
+			t.Logf("retrying at %v ...", tries[i+1])
+		}
+	}
+	t.Fatal("all attempts failed")
+}
+
+// Test that the HTTP/2 server RSTs stream on slow write.
+func TestHTTP2WriteDeadlineEnforcedPerStream(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	setParallel(t)
+	defer afterTest(t)
+	tryTimeouts(t, testHTTP2WriteDeadlineEnforcedPerStream)
+}
+
+func testHTTP2WriteDeadlineEnforcedPerStream(timeout time.Duration) error {
+	reqNum := 0
+	ts := httptest.NewUnstartedServer(HandlerFunc(func(res ResponseWriter, req *Request) {
+		reqNum++
+		if reqNum == 1 {
+			return // first request succeeds
+		}
+		time.Sleep(timeout) // second request times out
+	}))
+	ts.Config.WriteTimeout = timeout / 2
+	ts.TLS = &tls.Config{NextProtos: []string{"h2"}}
+	ts.StartTLS()
+	defer ts.Close()
+
+	c := ts.Client()
+	if err := ExportHttp2ConfigureTransport(c.Transport.(*Transport)); err != nil {
+		return fmt.Errorf("ExportHttp2ConfigureTransport: %v", err)
+	}
+
+	req, err := NewRequest("GET", ts.URL, nil)
+	if err != nil {
+		return fmt.Errorf("NewRequest: %v", err)
+	}
+	r, err := c.Do(req)
+	if err != nil {
+		return fmt.Errorf("http2 Get #1: %v", err)
+	}
+	r.Body.Close()
+	if r.ProtoMajor != 2 {
+		return fmt.Errorf("http2 Get expected HTTP/2.0, got %q", r.Proto)
+	}
+
+	req, err = NewRequest("GET", ts.URL, nil)
+	if err != nil {
+		return fmt.Errorf("NewRequest: %v", err)
+	}
+	r, err = c.Do(req)
+	if err == nil {
+		r.Body.Close()
+		if r.ProtoMajor != 2 {
+			return fmt.Errorf("http2 Get expected HTTP/2.0, got %q", r.Proto)
+		}
+		return fmt.Errorf("http2 Get #2 expected error, got nil")
+	}
+	expected := "stream ID 3; INTERNAL_ERROR" // client IDs are odd, second stream should be 3
+	if !strings.Contains(err.Error(), expected) {
+		return fmt.Errorf("http2 Get #2: expected error to contain %q, got %q", expected, err)
+	}
+	return nil
+}
+
+// Test that the HTTP/2 server does not send RST when WriteDeadline not set.
+func TestHTTP2NoWriteDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	setParallel(t)
+	defer afterTest(t)
+	tryTimeouts(t, testHTTP2NoWriteDeadline)
+}
+
+func testHTTP2NoWriteDeadline(timeout time.Duration) error {
+	reqNum := 0
+	ts := httptest.NewUnstartedServer(HandlerFunc(func(res ResponseWriter, req *Request) {
+		reqNum++
+		if reqNum == 1 {
+			return // first request succeeds
+		}
+		time.Sleep(timeout) // second request timesout
+	}))
+	ts.TLS = &tls.Config{NextProtos: []string{"h2"}}
+	ts.StartTLS()
+	defer ts.Close()
+
+	c := ts.Client()
+	if err := ExportHttp2ConfigureTransport(c.Transport.(*Transport)); err != nil {
+		return fmt.Errorf("ExportHttp2ConfigureTransport: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		req, err := NewRequest("GET", ts.URL, nil)
+		if err != nil {
+			return fmt.Errorf("NewRequest: %v", err)
+		}
+		r, err := c.Do(req)
+		if err != nil {
+			return fmt.Errorf("http2 Get #%d: %v", i, err)
+		}
+		r.Body.Close()
+		if r.ProtoMajor != 2 {
+			return fmt.Errorf("http2 Get expected HTTP/2.0, got %q", r.Proto)
+		}
+	}
+	return nil
+}
+
 // golang.org/issue/4741 -- setting only a write timeout that triggers
 // shouldn't cause a handler to block forever on reads (next HTTP
 // request) that will never happen.
@@ -3579,8 +3702,8 @@ func testTransportAndServerSharedBodyRace(t *testing.T, h2 bool) {
 
 // Test that a hanging Request.Body.Read from another goroutine can't
 // cause the Handler goroutine's Request.Body.Close to block.
+// See issue 7121.
 func TestRequestBodyCloseDoesntBlock(t *testing.T) {
-	t.Skipf("Skipping known issue; see golang.org/issue/7121")
 	if testing.Short() {
 		t.Skip("skipping in -short mode")
 	}
@@ -4438,13 +4561,6 @@ func testServerContext_ServerContextKey(t *testing.T, h2 bool) {
 		if _, ok := got.(*Server); !ok {
 			t.Errorf("context value = %T; want *http.Server", got)
 		}
-
-		got = ctx.Value(LocalAddrContextKey)
-		if addr, ok := got.(net.Addr); !ok {
-			t.Errorf("local addr value = %T; want net.Addr", got)
-		} else if fmt.Sprint(addr) != r.Host {
-			t.Errorf("local addr = %v; want %v", addr, r.Host)
-		}
 	}))
 	defer cst.close()
 	res, err := cst.c.Get(cst.ts.URL)
@@ -4452,6 +4568,37 @@ func testServerContext_ServerContextKey(t *testing.T, h2 bool) {
 		t.Fatal(err)
 	}
 	res.Body.Close()
+}
+
+func TestServerContext_LocalAddrContextKey_h1(t *testing.T) {
+	testServerContext_LocalAddrContextKey(t, h1Mode)
+}
+func TestServerContext_LocalAddrContextKey_h2(t *testing.T) {
+	testServerContext_LocalAddrContextKey(t, h2Mode)
+}
+func testServerContext_LocalAddrContextKey(t *testing.T, h2 bool) {
+	setParallel(t)
+	defer afterTest(t)
+	ch := make(chan interface{}, 1)
+	cst := newClientServerTest(t, h2, HandlerFunc(func(w ResponseWriter, r *Request) {
+		ch <- r.Context().Value(LocalAddrContextKey)
+	}))
+	defer cst.close()
+	if _, err := cst.c.Head(cst.ts.URL); err != nil {
+		t.Fatal(err)
+	}
+
+	host := cst.ts.Listener.Addr().String()
+	select {
+	case got := <-ch:
+		if addr, ok := got.(net.Addr); !ok {
+			t.Errorf("local addr value = %T; want net.Addr", got)
+		} else if fmt.Sprint(addr) != host {
+			t.Errorf("local addr = %v; want %v", addr, host)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("timed out")
+	}
 }
 
 // https://golang.org/issue/15960
@@ -5391,4 +5538,15 @@ func TestServerValidatesMethod(t *testing.T) {
 			t.Errorf("For %s, Status = %d; want %d", tt.method, res.StatusCode, tt.want)
 		}
 	}
+}
+
+func BenchmarkResponseStatusLine(b *testing.B) {
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		bw := bufio.NewWriter(ioutil.Discard)
+		var buf3 [3]byte
+		for pb.Next() {
+			Export_writeStatusLine(bw, true, 200, buf3[:])
+		}
+	})
 }

@@ -83,8 +83,8 @@ type Cmd struct {
 	// If either is nil, Run connects the corresponding file descriptor
 	// to the null device (os.DevNull).
 	//
-	// If Stdout and Stderr are the same writer, at most one
-	// goroutine at a time will call Write.
+	// If Stdout and Stderr are the same writer, and have a type that can be compared with ==,
+	// at most one goroutine at a time will call Write.
 	Stdout io.Writer
 	Stderr io.Writer
 
@@ -274,9 +274,8 @@ func (c *Cmd) closeDescriptors(closers []io.Closer) {
 // copying stdin, stdout, and stderr, and exits with a zero exit
 // status.
 //
-// If the command fails to run or doesn't complete successfully, the
-// error is of type *ExitError. Other error types may be
-// returned for I/O problems.
+// If the command starts but does not complete successfully, the error is of
+// type *ExitError. Other error types may be returned for other situations.
 func (c *Cmd) Run() error {
 	if err := c.Start(); err != nil {
 		return err

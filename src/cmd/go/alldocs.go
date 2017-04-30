@@ -316,7 +316,7 @@
 //
 // Usage:
 //
-// 	go env [var ...]
+// 	go env [-json] [var ...]
 //
 // Env prints Go environment information.
 //
@@ -324,6 +324,9 @@
 // (on Windows, a batch file).  If one or more variable
 // names is given as arguments,  env prints the value of
 // each named variable on its own line.
+//
+// The -json flag prints the environment in JSON format
+// instead of as a shell script.
 //
 //
 // Start a bug report
@@ -795,14 +798,12 @@
 //
 // Usage:
 //
-// 	go vet [-n] [-x] [build flags] [packages]
+// 	go vet [-n] [-x] [build flags] [vet flags] [packages]
 //
 // Vet runs the Go vet command on the packages named by the import paths.
 //
-// For more about vet, see 'go doc cmd/vet'.
+// For more about vet and its flags, see 'go doc cmd/vet'.
 // For more about specifying packages, see 'go help packages'.
-//
-// To run the vet tool with specific options, run 'go tool vet'.
 //
 // The -n flag prints commands that would be executed.
 // The -x flag prints commands as they are executed.
@@ -1361,8 +1362,19 @@
 // each of which can match any string, including the empty string and
 // strings containing slashes.  Such a pattern expands to all package
 // directories found in the GOPATH trees with names matching the
-// patterns.  As a special case, x/... matches x as well as x's subdirectories.
-// For example, net/... expands to net and packages in its subdirectories.
+// patterns.
+//
+// To make common patterns more convenient, there are two special cases.
+// First, /... at the end of the pattern can match an empty string,
+// so that net/... matches both net and packages in its subdirectories, like net/http.
+// Second, any slash-separated pattern element containing a wildcard never
+// participates in a match of the "vendor" element in the path of a vendored
+// package, so that ./... does not match packages in subdirectories of
+// ./vendor or ./mycode/vendor, but ./vendor/... and ./mycode/vendor/... do.
+// Note, however, that a directory named vendor that itself contains code
+// is not a vendored package: cmd/vendor would be a command named vendor,
+// and the pattern cmd/... matches it.
+// See golang.org/s/go15vendor for more about vendoring.
 //
 // An import path can also name a package to be downloaded from
 // a remote repository.  Run 'go help importpath' for details.

@@ -98,7 +98,7 @@ fi
 
 GOGCCFLAGS=$(go env GOGCCFLAGS)
 if [ "$goos" = "android" ]; then
-	GOGCCFLAGS="${GOGCCFLAGS} -pie"
+	GOGCCFLAGS="${GOGCCFLAGS} -pie -fuse-ld=gold"
 fi
 
 status=0
@@ -177,6 +177,13 @@ if test "$output" != "PASS"; then
 	./testp5 ./libgo5.$libext verbose
     fi
     status=1
+fi
+
+if test "$libext" = "dylib"; then
+	# make sure dylibs are well-formed
+	if ! otool -l libgo*.dylib >/dev/null; then
+		status=1
+	fi
 fi
 
 if test $status = 0; then

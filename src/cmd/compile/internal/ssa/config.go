@@ -6,6 +6,7 @@ package ssa
 
 import (
 	"cmd/internal/obj"
+	"cmd/internal/objabi"
 	"cmd/internal/src"
 	"os"
 	"strconv"
@@ -16,9 +17,8 @@ import (
 // and shared across all compilations.
 type Config struct {
 	arch            string // "amd64", etc.
-	IntSize         int64  // 4 or 8
-	PtrSize         int64  // 4 or 8
-	RegSize         int64  // 4 or 8
+	PtrSize         int64  // 4 or 8; copy of cmd/internal/sys.Arch.PtrSize
+	RegSize         int64  // 4 or 8; copy of cmd/internal/sys.Arch.RegSize
 	Types           Types
 	lowerBlock      blockRewriter // lowering function
 	lowerValue      valueRewriter // lowering function
@@ -79,9 +79,6 @@ type Logger interface {
 
 	// Fatal reports a compiler error and exits.
 	Fatalf(pos src.XPos, msg string, args ...interface{})
-
-	// Error reports a compiler error but keep going.
-	Error(pos src.XPos, msg string, args ...interface{})
 
 	// Warnl writes compiler messages in the form expected by "errorcheck" tests
 	Warnl(pos src.XPos, fmt_ string, args ...interface{})
@@ -145,7 +142,6 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config 
 	c := &Config{arch: arch, Types: types}
 	switch arch {
 	case "amd64":
-		c.IntSize = 8
 		c.PtrSize = 8
 		c.RegSize = 8
 		c.lowerBlock = rewriteBlockAMD64
@@ -157,7 +153,6 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config 
 		c.LinkReg = linkRegAMD64
 		c.hasGReg = false
 	case "amd64p32":
-		c.IntSize = 4
 		c.PtrSize = 4
 		c.RegSize = 8
 		c.lowerBlock = rewriteBlockAMD64
@@ -170,7 +165,6 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config 
 		c.hasGReg = false
 		c.noDuffDevice = true
 	case "386":
-		c.IntSize = 4
 		c.PtrSize = 4
 		c.RegSize = 4
 		c.lowerBlock = rewriteBlock386
@@ -182,7 +176,6 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config 
 		c.LinkReg = linkReg386
 		c.hasGReg = false
 	case "arm":
-		c.IntSize = 4
 		c.PtrSize = 4
 		c.RegSize = 4
 		c.lowerBlock = rewriteBlockARM
@@ -194,7 +187,6 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config 
 		c.LinkReg = linkRegARM
 		c.hasGReg = true
 	case "arm64":
-		c.IntSize = 8
 		c.PtrSize = 8
 		c.RegSize = 8
 		c.lowerBlock = rewriteBlockARM64
@@ -205,12 +197,11 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config 
 		c.FPReg = framepointerRegARM64
 		c.LinkReg = linkRegARM64
 		c.hasGReg = true
-		c.noDuffDevice = obj.GOOS == "darwin" // darwin linker cannot handle BR26 reloc with non-zero addend
+		c.noDuffDevice = objabi.GOOS == "darwin" // darwin linker cannot handle BR26 reloc with non-zero addend
 	case "ppc64":
 		c.BigEndian = true
 		fallthrough
 	case "ppc64le":
-		c.IntSize = 8
 		c.PtrSize = 8
 		c.RegSize = 8
 		c.lowerBlock = rewriteBlockPPC64
@@ -226,7 +217,6 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config 
 		c.BigEndian = true
 		fallthrough
 	case "mips64le":
-		c.IntSize = 8
 		c.PtrSize = 8
 		c.RegSize = 8
 		c.lowerBlock = rewriteBlockMIPS64
@@ -239,7 +229,6 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config 
 		c.LinkReg = linkRegMIPS64
 		c.hasGReg = true
 	case "s390x":
-		c.IntSize = 8
 		c.PtrSize = 8
 		c.RegSize = 8
 		c.lowerBlock = rewriteBlockS390X
@@ -256,7 +245,6 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config 
 		c.BigEndian = true
 		fallthrough
 	case "mipsle":
-		c.IntSize = 4
 		c.PtrSize = 4
 		c.RegSize = 4
 		c.lowerBlock = rewriteBlockMIPS
@@ -274,11 +262,11 @@ func NewConfig(arch string, types Types, ctxt *obj.Link, optimize bool) *Config 
 	}
 	c.ctxt = ctxt
 	c.optimize = optimize
-	c.nacl = obj.GOOS == "nacl"
+	c.nacl = objabi.GOOS == "nacl"
 
 	// Don't use Duff's device on Plan 9 AMD64, because floating
 	// point operations are not allowed in note handler.
-	if obj.GOOS == "plan9" && arch == "amd64" {
+	if objabi.GOOS == "plan9" && arch == "amd64" {
 		c.noDuffDevice = true
 	}
 

@@ -582,6 +582,8 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		fallthrough
 	case ssa.OpARMMVN,
 		ssa.OpARMCLZ,
+		ssa.OpARMREV,
+		ssa.OpARMRBIT,
 		ssa.OpARMSQRTD,
 		ssa.OpARMNEGF,
 		ssa.OpARMNEGD,
@@ -620,8 +622,13 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Offset = v.AuxInt
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
-	case ssa.OpARMCALLstatic, ssa.OpARMCALLclosure, ssa.OpARMCALLinter, ssa.OpARMCALLudiv:
+	case ssa.OpARMCALLstatic, ssa.OpARMCALLclosure, ssa.OpARMCALLinter:
 		s.Call(v)
+	case ssa.OpARMCALLudiv:
+		p := s.Prog(obj.ACALL)
+		p.To.Type = obj.TYPE_MEM
+		p.To.Name = obj.NAME_EXTERN
+		p.To.Sym = gc.Udiv
 	case ssa.OpARMDUFFZERO:
 		p := s.Prog(obj.ADUFFZERO)
 		p.To.Type = obj.TYPE_MEM
@@ -754,6 +761,8 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		v.Fatalf("Flag* ops should never make it to codegen %v", v.LongString())
 	case ssa.OpARMInvertFlags:
 		v.Fatalf("InvertFlags should never make it to codegen %v", v.LongString())
+	case ssa.OpClobber:
+		// TODO: implement for clobberdead experiment. Nop is ok for now.
 	default:
 		v.Fatalf("genValue not implemented: %s", v.LongString())
 	}

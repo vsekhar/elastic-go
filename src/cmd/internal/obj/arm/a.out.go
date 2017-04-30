@@ -121,9 +121,10 @@ const (
 	C_PSR
 	C_FCR
 
-	C_RCON /* 0xff rotated */
-	C_NCON /* ~RCON */
-	C_SCON /* 0xffff */
+	C_RCON  /* 0xff rotated */
+	C_NCON  /* ~RCON */
+	C_RCON2 /* OR of two disjoint C_RCON constants */
+	C_SCON  /* 0xffff */
 	C_LCON
 	C_LCONADDR
 	C_ZFCON
@@ -243,9 +244,12 @@ const (
 	AMULU
 	ADIVU
 	AMUL
+	AMMUL
 	ADIV
 	AMOD
 	AMODU
+	ADIVHW
+	ADIVUHW
 
 	AMOVB
 	AMOVBS
@@ -261,6 +265,9 @@ const (
 	ARFE
 	ASWI
 	AMULA
+	AMULS
+	AMMULA
+	AMMULS
 
 	AWORD
 
@@ -281,11 +288,17 @@ const (
 	APLD
 
 	ACLZ
+	AREV
+	AREV16
+	AREVSH
+	ARBIT
 
 	AMULWT
 	AMULWB
+	AMULBB
 	AMULAWT
 	AMULAWB
+	AMULABB
 
 	ADATABUNDLE
 	ADATABUNDLEEND

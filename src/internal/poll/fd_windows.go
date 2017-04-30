@@ -160,7 +160,7 @@ func (s *ioSrv) ExecIO(o *operation, name string, submit func(o *operation) erro
 
 	fd := o.fd
 	// Notify runtime netpoll about starting IO.
-	err := fd.pd.prepare(int(o.mode))
+	err := fd.pd.prepare(int(o.mode), fd.isFile)
 	if err != nil {
 		return 0, err
 	}
@@ -188,7 +188,7 @@ func (s *ioSrv) ExecIO(o *operation, name string, submit func(o *operation) erro
 		return 0, err
 	}
 	// Wait for our request to complete.
-	err = fd.pd.wait(int(o.mode))
+	err = fd.pd.wait(int(o.mode), fd.isFile)
 	if err == nil {
 		// All is good. Extract our IO results and return.
 		if o.errno != 0 {
@@ -200,10 +200,10 @@ func (s *ioSrv) ExecIO(o *operation, name string, submit func(o *operation) erro
 	// IO is interrupted by "close" or "timeout"
 	netpollErr := err
 	switch netpollErr {
-	case ErrClosing, ErrTimeout:
+	case ErrNetClosing, ErrFileClosing, ErrTimeout:
 		// will deal with those.
 	default:
-		panic("net: unexpected runtime.netpoll error: " + netpollErr.Error())
+		panic("unexpected runtime.netpoll error: " + netpollErr.Error())
 	}
 	// Cancel our request.
 	if canCancelIO {
@@ -376,15 +376,18 @@ func (fd *FD) destroy() error {
 	return err
 }
 
+// Close closes the FD. The underlying file descriptor is closed by
+// the destroy method when there are no remaining references.
 func (fd *FD) Close() error {
 	if !fd.fdmu.increfAndClose() {
-		return ErrClosing
+		return errClosing(fd.isFile)
 	}
 	// unblock pending reader and writer
 	fd.pd.evict()
 	return fd.decref()
 }
 
+// Shutdown wraps the shutdown network call.
 func (fd *FD) Shutdown(how int) error {
 	if err := fd.incref(); err != nil {
 		return err
@@ -393,6 +396,7 @@ func (fd *FD) Shutdown(how int) error {
 	return syscall.Shutdown(fd.Sysfd, how)
 }
 
+// Read implements io.Reader.
 func (fd *FD) Read(buf []byte) (int, error) {
 	if err := fd.readLock(); err != nil {
 		return 0, err
@@ -503,11 +507,14 @@ func (fd *FD) readConsole(b []byte) (int, error) {
 	return i, nil
 }
 
+// Pread emulates the Unix pread system call.
 func (fd *FD) Pread(b []byte, off int64) (int, error) {
-	if err := fd.readLock(); err != nil {
+	// Call incref, not readLock, because since pread specifies the
+	// offset it is independent from other reads.
+	if err := fd.incref(); err != nil {
 		return 0, err
 	}
-	defer fd.readUnlock()
+	defer fd.decref()
 
 	fd.l.Lock()
 	defer fd.l.Unlock()
@@ -534,7 +541,8 @@ func (fd *FD) Pread(b []byte, off int64) (int, error) {
 	return int(done), e
 }
 
-func (fd *FD) RecvFrom(buf []byte) (int, syscall.Sockaddr, error) {
+// ReadFrom wraps the recvfrom network call.
+func (fd *FD) ReadFrom(buf []byte) (int, syscall.Sockaddr, error) {
 	if len(buf) == 0 {
 		return 0, nil, nil
 	}
@@ -559,6 +567,7 @@ func (fd *FD) RecvFrom(buf []byte) (int, syscall.Sockaddr, error) {
 	return n, sa, nil
 }
 
+// Write implements io.Writer.
 func (fd *FD) Write(buf []byte) (int, error) {
 	if err := fd.writeLock(); err != nil {
 		return 0, err
@@ -634,11 +643,14 @@ func (fd *FD) writeConsole(b []byte) (int, error) {
 	return n, nil
 }
 
+// Pwrite emulates the Unix pwrite system call.
 func (fd *FD) Pwrite(b []byte, off int64) (int, error) {
-	if err := fd.writeLock(); err != nil {
+	// Call incref, not writeLock, because since pwrite specifies the
+	// offset it is independent from other writes.
+	if err := fd.incref(); err != nil {
 		return 0, err
 	}
-	defer fd.writeUnlock()
+	defer fd.decref()
 
 	fd.l.Lock()
 	defer fd.l.Unlock()
@@ -659,6 +671,7 @@ func (fd *FD) Pwrite(b []byte, off int64) (int, error) {
 	return int(done), nil
 }
 
+// Writev emulates the Unix writev system call.
 func (fd *FD) Writev(buf *[][]byte) (int64, error) {
 	if len(*buf) == 0 {
 		return 0, nil
@@ -681,6 +694,7 @@ func (fd *FD) Writev(buf *[][]byte) (int64, error) {
 	return int64(n), err
 }
 
+// WriteTo wraps the sendto network call.
 func (fd *FD) WriteTo(buf []byte, sa syscall.Sockaddr) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
@@ -771,6 +785,7 @@ func (fd *FD) Accept(sysSocket func() (syscall.Handle, error)) (syscall.Handle, 
 	}
 }
 
+// Seek wraps syscall.Seek.
 func (fd *FD) Seek(offset int64, whence int) (int64, error) {
 	if err := fd.incref(); err != nil {
 		return 0, err
@@ -801,6 +816,7 @@ func (fd *FD) Fchdir() error {
 	return syscall.Fchdir(fd.Sysfd)
 }
 
+// GetFileType wraps syscall.GetFileType.
 func (fd *FD) GetFileType() (uint32, error) {
 	if err := fd.incref(); err != nil {
 		return 0, err
@@ -809,6 +825,7 @@ func (fd *FD) GetFileType() (uint32, error) {
 	return syscall.GetFileType(fd.Sysfd)
 }
 
+// GetFileInformationByHandle wraps GetFileInformationByHandle.
 func (fd *FD) GetFileInformationByHandle(data *syscall.ByHandleFileInformation) error {
 	if err := fd.incref(); err != nil {
 		return err

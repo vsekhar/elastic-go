@@ -93,7 +93,7 @@ func writebarrier(f *Func) {
 			if sp == nil {
 				sp = f.Entry.NewValue0(initpos, OpSP, f.Config.Types.Uintptr)
 			}
-			wbsym := &ExternSymbol{Typ: f.Config.Types.Bool, Sym: f.fe.Syslook("writeBarrier")}
+			wbsym := &ExternSymbol{Sym: f.fe.Syslook("writeBarrier")}
 			wbaddr = f.Entry.NewValue1A(initpos, OpAddr, f.Config.Types.UInt32Ptr, wbsym, sb)
 			writebarrierptr = f.fe.Syslook("writebarrierptr")
 			typedmemmove = f.fe.Syslook("typedmemmove")
@@ -172,15 +172,12 @@ func writebarrier(f *Func) {
 		memThen := mem
 		memElse := mem
 		for _, w := range stores {
-			var val *Value
 			ptr := w.Args[0]
-			var typ interface{}
-			if w.Op != OpStoreWB {
-				typ = &ExternSymbol{Typ: types.Uintptr, Sym: w.Aux.(Type).Symbol()}
-			}
-			pos = w.Pos
+			pos := w.Pos
 
 			var fn *obj.LSym
+			var typ *ExternSymbol
+			var val *Value
 			switch w.Op {
 			case OpStoreWB:
 				fn = writebarrierptr
@@ -188,8 +185,10 @@ func writebarrier(f *Func) {
 			case OpMoveWB:
 				fn = typedmemmove
 				val = w.Args[1]
+				typ = &ExternSymbol{Sym: w.Aux.(Type).Symbol()}
 			case OpZeroWB:
 				fn = typedmemclr
+				typ = &ExternSymbol{Sym: w.Aux.(Type).Symbol()}
 			}
 
 			// then block: emit write barrier call
@@ -208,9 +207,6 @@ func writebarrier(f *Func) {
 				memElse.Aux = w.Aux
 			}
 
-			if f.NoWB {
-				f.fe.Error(pos, "write barrier prohibited")
-			}
 			if !f.WBPos.IsKnown() {
 				f.WBPos = pos
 			}
@@ -258,7 +254,7 @@ func writebarrier(f *Func) {
 
 // wbcall emits write barrier runtime call in b, returns memory.
 // if valIsVolatile, it moves val into temp space before making the call.
-func wbcall(pos src.XPos, b *Block, fn *obj.LSym, typ interface{}, ptr, val, mem, sp, sb *Value, valIsVolatile bool) *Value {
+func wbcall(pos src.XPos, b *Block, fn *obj.LSym, typ *ExternSymbol, ptr, val, mem, sp, sb *Value, valIsVolatile bool) *Value {
 	config := b.Func.Config
 
 	var tmp GCNode
@@ -268,7 +264,7 @@ func wbcall(pos src.XPos, b *Block, fn *obj.LSym, typ interface{}, ptr, val, mem
 		// value we're trying to move.
 		t := val.Type.ElemType()
 		tmp = b.Func.fe.Auto(val.Pos, t)
-		aux := &AutoSymbol{Typ: t, Node: tmp}
+		aux := &AutoSymbol{Node: tmp}
 		mem = b.NewValue1A(pos, OpVarDef, TypeMem, tmp, mem)
 		tmpaddr := b.NewValue1A(pos, OpAddr, t.PtrTo(), aux, sp)
 		siz := t.Size()

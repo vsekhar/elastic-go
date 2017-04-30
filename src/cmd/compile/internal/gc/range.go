@@ -4,14 +4,17 @@
 
 package gc
 
-import "unicode/utf8"
+import (
+	"cmd/compile/internal/types"
+	"unicode/utf8"
+)
 
 // range
 func typecheckrange(n *Node) {
 	var toomany int
 	var why string
-	var t1 *Type
-	var t2 *Type
+	var t1 *types.Type
+	var t2 *types.Type
 	var v1 *Node
 	var v2 *Node
 	var ls []*Node
@@ -52,7 +55,7 @@ func typecheckrange(n *Node) {
 		goto out
 
 	case TARRAY, TSLICE:
-		t1 = Types[TINT]
+		t1 = types.Types[TINT]
 		t2 = t.Elem()
 
 	case TMAP:
@@ -72,8 +75,8 @@ func typecheckrange(n *Node) {
 		}
 
 	case TSTRING:
-		t1 = Types[TINT]
-		t2 = runetype
+		t1 = types.Types[TINT]
+		t2 = types.Runetype
 	}
 
 	if n.List.Len() > 2 || toomany != 0 {
@@ -120,10 +123,10 @@ func typecheckrange(n *Node) {
 
 	// second half of dance
 out:
-	n.Typecheck = 1
+	n.SetTypecheck(1)
 	ls = n.List.Slice()
 	for i1, n1 := range ls {
-		if n1.Typecheck == 0 {
+		if n1.Typecheck() == 0 {
 			ls[i1] = typecheck(ls[i1], Erv|Easgn)
 		}
 	}
@@ -187,15 +190,15 @@ func walkrange(n *Node) *Node {
 		// orderstmt arranged for a copy of the array/slice variable if needed.
 		ha := a
 
-		hv1 := temp(Types[TINT])
-		hn := temp(Types[TINT])
+		hv1 := temp(types.Types[TINT])
+		hn := temp(types.Types[TINT])
 		var hp *Node
 
 		init = append(init, nod(OAS, hv1, nil))
 		init = append(init, nod(OAS, hn, nod(OLEN, ha, nil)))
 
 		if v2 != nil {
-			hp = temp(typPtr(n.Type.Elem()))
+			hp = temp(types.NewPtr(n.Type.Elem()))
 			tmp := nod(OINDEX, ha, nodintconst(0))
 			tmp.SetBounded(true)
 			init = append(init, nod(OAS, hp, nod(OADDR, tmp, nil)))
@@ -228,9 +231,9 @@ func walkrange(n *Node) *Node {
 			tmp := nod(OADD, hp, nodintconst(t.Elem().Width))
 
 			tmp.Type = hp.Type
-			tmp.Typecheck = 1
-			tmp.Right.Type = Types[Tptr]
-			tmp.Right.Typecheck = 1
+			tmp.SetTypecheck(1)
+			tmp.Right.Type = types.Types[types.Tptr]
+			tmp.Right.SetTypecheck(1)
 			a = nod(OAS, hp, tmp)
 			a = typecheck(a, Etop)
 			n.Right.Ninit.Set1(a)
@@ -280,15 +283,15 @@ func walkrange(n *Node) *Node {
 		n.Left = nil
 
 		hv1 := temp(t.Elem())
-		hv1.Typecheck = 1
-		if haspointers(t.Elem()) {
+		hv1.SetTypecheck(1)
+		if types.Haspointers(t.Elem()) {
 			init = append(init, nod(OAS, hv1, nil))
 		}
-		hb := temp(Types[TBOOL])
+		hb := temp(types.Types[TBOOL])
 
 		n.Left = nod(ONE, hb, nodbool(false))
 		a := nod(OAS2RECV, nil, nil)
-		a.Typecheck = 1
+		a.SetTypecheck(1)
 		a.List.Set2(hv1, hb)
 		a.Rlist.Set1(nod(ORECV, ha, nil))
 		n.Left.Ninit.Set1(a)
@@ -321,9 +324,9 @@ func walkrange(n *Node) *Node {
 		// orderstmt arranged for a copy of the string variable.
 		ha := a
 
-		hv1 := temp(Types[TINT])
-		hv1t := temp(Types[TINT])
-		hv2 := temp(runetype)
+		hv1 := temp(types.Types[TINT])
+		hv1t := temp(types.Types[TINT])
+		hv2 := temp(types.Runetype)
 
 		// hv1 := 0
 		init = append(init, nod(OAS, hv1, nil))
@@ -339,7 +342,7 @@ func walkrange(n *Node) *Node {
 		// hv2 := rune(ha[hv1])
 		nind := nod(OINDEX, ha, hv1)
 		nind.SetBounded(true)
-		body = append(body, nod(OAS, hv2, conv(nind, runetype)))
+		body = append(body, nod(OAS, hv2, conv(nind, types.Runetype)))
 
 		// if hv2 < utf8.RuneSelf
 		nif := nod(OIF, nil, nil)
@@ -448,25 +451,25 @@ func memclrrange(n, v1, v2, a *Node) bool {
 	n.Left = nod(ONE, nod(OLEN, a, nil), nodintconst(0))
 
 	// hp = &a[0]
-	hp := temp(Types[TUNSAFEPTR])
+	hp := temp(types.Types[TUNSAFEPTR])
 
 	tmp := nod(OINDEX, a, nodintconst(0))
 	tmp.SetBounded(true)
 	tmp = nod(OADDR, tmp, nil)
 	tmp = nod(OCONVNOP, tmp, nil)
-	tmp.Type = Types[TUNSAFEPTR]
+	tmp.Type = types.Types[TUNSAFEPTR]
 	n.Nbody.Append(nod(OAS, hp, tmp))
 
 	// hn = len(a) * sizeof(elem(a))
-	hn := temp(Types[TUINTPTR])
+	hn := temp(types.Types[TUINTPTR])
 
 	tmp = nod(OLEN, a, nil)
 	tmp = nod(OMUL, tmp, nodintconst(elemsize))
-	tmp = conv(tmp, Types[TUINTPTR])
+	tmp = conv(tmp, types.Types[TUINTPTR])
 	n.Nbody.Append(nod(OAS, hn, tmp))
 
 	var fn *Node
-	if haspointers(a.Type.Elem()) {
+	if types.Haspointers(a.Type.Elem()) {
 		// memclrHasPointers(hp, hn)
 		fn = mkcall("memclrHasPointers", nil, nil, hp, hn)
 	} else {

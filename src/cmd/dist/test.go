@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,6 +60,7 @@ type tester struct {
 	goroot     string
 	goarch     string
 	gohostarch string
+	goarm      string
 	goos       string
 	gohostos   string
 	cgoEnabled bool
@@ -102,6 +104,7 @@ func (t *tester) run() {
 	t.gohostos = mustEnv("GOHOSTOS")
 	t.goarch = mustEnv("GOARCH")
 	t.gohostarch = mustEnv("GOHOSTARCH")
+	t.goarm = os.Getenv("GOARM")
 	slurp, err := exec.Command("go", "env", "CGO_ENABLED").Output()
 	if err != nil {
 		log.Fatalf("Error running go env CGO_ENABLED: %v", err)
@@ -338,7 +341,8 @@ var stdOutErrAreTerminals func() bool
 func (t *tester) registerTests() {
 	if strings.HasSuffix(os.Getenv("GO_BUILDER_NAME"), "-vetall") {
 		// Run vet over std and cmd and call it quits.
-		for osarch := range cgoEnabled {
+		for k := range cgoEnabled {
+			osarch := k
 			t.tests = append(t.tests, distTest{
 				name:    "vet/" + osarch,
 				heading: "go vet std cmd",
@@ -462,7 +466,10 @@ func (t *tester) registerTests() {
 	}
 
 	// Test internal linking of PIE binaries where it is supported.
-	if t.goos == "linux" && t.goarch == "amd64" {
+	if t.goos == "linux" && t.goarch == "amd64" && !isAlpineLinux() {
+		// Issue 18243: We don't have a way to set the default
+		// dynamic linker used in internal linking mode. So
+		// this test is skipped on Alpine.
 		t.tests = append(t.tests, distTest{
 			name:    "pie_internal",
 			heading: "internal linking of -buildmode=pie",
@@ -747,6 +754,10 @@ func (t *tester) internalLink() bool {
 	if t.goarch == "arm64" || t.goarch == "mips64" || t.goarch == "mips64le" || t.goarch == "mips" || t.goarch == "mipsle" {
 		return false
 	}
+	if isAlpineLinux() {
+		// Issue 18243.
+		return false
+	}
 	return true
 }
 
@@ -783,6 +794,12 @@ func (t *tester) supportedBuildmode(mode string) bool {
 			// causing build failures potentially
 			// obscuring other issues. This is hopefully a
 			// temporary workaround. See golang.org/issue/17937.
+			return false
+		}
+
+		if pair == "linux-arm" && t.goarm == "5" {
+			// Skip the plugin tests for now on ARMv5 because it causes a
+			// SIGILL. See https://golang.org/issue/19674
 			return false
 		}
 
@@ -1083,9 +1100,19 @@ func (t *tester) hasBash() bool {
 func (t *tester) raceDetectorSupported() bool {
 	switch t.gohostos {
 	case "linux", "darwin", "freebsd", "windows":
-		return t.cgoEnabled && t.goarch == "amd64" && t.gohostos == t.goos
+		// The race detector doesn't work on Alpine Linux:
+		// golang.org/issue/14481
+		return t.cgoEnabled && t.goarch == "amd64" && t.gohostos == t.goos && !isAlpineLinux()
 	}
 	return false
+}
+
+func isAlpineLinux() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	fi, err := os.Lstat("/etc/alpine-release")
+	return err == nil && fi.Mode().IsRegular()
 }
 
 func (t *tester) runFlag(rx string) string {
@@ -1096,9 +1123,9 @@ func (t *tester) runFlag(rx string) string {
 }
 
 func (t *tester) raceTest(dt *distTest) error {
-	t.addCmd(dt, "src", "go", "test", "-race", "-i", "runtime/race", "flag", "os/exec")
+	t.addCmd(dt, "src", "go", "test", "-race", "-i", "runtime/race", "flag", "os", "os/exec")
 	t.addCmd(dt, "src", "go", "test", "-race", t.runFlag("Output"), "runtime/race")
-	t.addCmd(dt, "src", "go", "test", "-race", "-short", t.runFlag("TestParse|TestEcho|TestStdinCloseRace"), "flag", "os/exec")
+	t.addCmd(dt, "src", "go", "test", "-race", "-short", t.runFlag("TestParse|TestEcho|TestStdinCloseRace|TestClosedPipeRace"), "flag", "os", "os/exec")
 	// We don't want the following line, because it
 	// slows down all.bash (by 10 seconds on my laptop).
 	// The race builder should catch any error here, but doesn't.

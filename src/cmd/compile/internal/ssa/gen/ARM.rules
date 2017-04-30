@@ -34,12 +34,12 @@
 (Mul32uhilo x y) -> (MULLU x y)
 
 (Div32 x y) ->
-	(SUB (XOR <types.UInt32>                                                                  // negate the result if one operand is negative
-		(Select0 <types.UInt32> (CALLudiv {config.ctxt.Lookup("udiv", 0)}
+	(SUB (XOR <types.UInt32>                                                        // negate the result if one operand is negative
+		(Select0 <types.UInt32> (CALLudiv
 			(SUB <types.UInt32> (XOR x <types.UInt32> (Signmask x)) (Signmask x))   // negate x if negative
 			(SUB <types.UInt32> (XOR y <types.UInt32> (Signmask y)) (Signmask y)))) // negate y if negative
 		(Signmask (XOR <types.UInt32> x y))) (Signmask (XOR <types.UInt32> x y)))
-(Div32u x y) -> (Select0 <types.UInt32> (CALLudiv {config.ctxt.Lookup("udiv", 0)} x y))
+(Div32u x y) -> (Select0 <types.UInt32> (CALLudiv x y))
 (Div16 x y) -> (Div32 (SignExt16to32 x) (SignExt16to32 y))
 (Div16u x y) -> (Div32u (ZeroExt16to32 x) (ZeroExt16to32 y))
 (Div8 x y) -> (Div32 (SignExt8to32 x) (SignExt8to32 y))
@@ -48,12 +48,12 @@
 (Div64F x y) -> (DIVD x y)
 
 (Mod32 x y) ->
-	(SUB (XOR <types.UInt32>                                                                  // negate the result if x is negative
-		(Select1 <types.UInt32> (CALLudiv {config.ctxt.Lookup("udiv", 0)}
+	(SUB (XOR <types.UInt32>                                                        // negate the result if x is negative
+		(Select1 <types.UInt32> (CALLudiv
 			(SUB <types.UInt32> (XOR <types.UInt32> x (Signmask x)) (Signmask x))   // negate x if negative
 			(SUB <types.UInt32> (XOR <types.UInt32> y (Signmask y)) (Signmask y)))) // negate y if negative
 		(Signmask x)) (Signmask x))
-(Mod32u x y) -> (Select1 <types.UInt32> (CALLudiv {config.ctxt.Lookup("udiv", 0)} x y))
+(Mod32u x y) -> (Select1 <types.UInt32> (CALLudiv x y))
 (Mod16 x y) -> (Mod32 (SignExt16to32 x) (SignExt16to32 y))
 (Mod16u x y) -> (Mod32u (ZeroExt16to32 x) (ZeroExt16to32 y))
 (Mod8 x y) -> (Mod32 (SignExt8to32 x) (SignExt8to32 y))
@@ -87,14 +87,17 @@
 
 (Sqrt x) -> (SQRTD x)
 
-// count trailing zero
+// count trailing zero for ARMv5 and ARMv6
 // 32 - CLZ(x&-x - 1)
-(Ctz32 <t> x) -> (RSBconst [32] (CLZ <t> (SUBconst <t> (AND <t> x (RSBconst <t> [0] x)) [1])))
+(Ctz32 <t> x) && objabi.GOARM<=6 -> (RSBconst [32] (CLZ <t> (SUBconst <t> (AND <t> x (RSBconst <t> [0] x)) [1])))
+
+// count trailing zero for ARMv7
+(Ctz32 <t> x) && objabi.GOARM==7 -> (CLZ <t> (RBIT <t> x))
 
 // bit length
 (BitLen32 <t> x) -> (RSBconst [32] (CLZ <t> x))
 
-// byte swap
+// byte swap for ARMv5
 // let (a, b, c, d) be the bytes of x from high to low
 // t1 = x right rotate 16 bits -- (c,   d,   a,   b  )
 // t2 = x ^ t1                 -- (a^c, b^d, a^c, b^d)
@@ -103,10 +106,13 @@
 // t5 = x right rotate 8 bits  -- (d,   a,   b,   c  )
 // result = t4 ^ t5            -- (d,   c,   b,   a  )
 // using shifted ops this can be done in 4 instructions.
-(Bswap32 <t> x) ->
+(Bswap32 <t> x) && objabi.GOARM==5 ->
 	(XOR <t>
 		(SRLconst <t> (BICconst <t> (XOR <t> x (SRRconst <t> [16] x)) [0xff0000]) [8])
 		(SRRconst <t> x [8]))
+
+// byte swap for ARMv6 and above
+(Bswap32 x) && objabi.GOARM>=6 -> (REV x)
 
 // boolean ops -- booleans are represented with 0=false, 1=true
 (AndB x y) -> (AND x y)
@@ -424,21 +430,34 @@
 
 // fold offset into address
 (ADDconst [off1] (MOVWaddr [off2] {sym} ptr)) -> (MOVWaddr [off1+off2] {sym} ptr)
+(SUBconst [off1] (MOVWaddr [off2] {sym} ptr)) -> (MOVWaddr [off2-off1] {sym} ptr)
 
 // fold address into load/store
 (MOVBload [off1] {sym} (ADDconst [off2] ptr) mem) -> (MOVBload [off1+off2] {sym} ptr mem)
+(MOVBload [off1] {sym} (SUBconst [off2] ptr) mem) -> (MOVBload [off1-off2] {sym} ptr mem)
 (MOVBUload [off1] {sym} (ADDconst [off2] ptr) mem) -> (MOVBUload [off1+off2] {sym} ptr mem)
+(MOVBUload [off1] {sym} (SUBconst [off2] ptr) mem) -> (MOVBUload [off1-off2] {sym} ptr mem)
 (MOVHload [off1] {sym} (ADDconst [off2] ptr) mem) -> (MOVHload [off1+off2] {sym} ptr mem)
+(MOVHload [off1] {sym} (SUBconst [off2] ptr) mem) -> (MOVHload [off1-off2] {sym} ptr mem)
 (MOVHUload [off1] {sym} (ADDconst [off2] ptr) mem) -> (MOVHUload [off1+off2] {sym} ptr mem)
+(MOVHUload [off1] {sym} (SUBconst [off2] ptr) mem) -> (MOVHUload [off1-off2] {sym} ptr mem)
 (MOVWload [off1] {sym} (ADDconst [off2] ptr) mem) -> (MOVWload [off1+off2] {sym} ptr mem)
+(MOVWload [off1] {sym} (SUBconst [off2] ptr) mem) -> (MOVWload [off1-off2] {sym} ptr mem)
 (MOVFload [off1] {sym} (ADDconst [off2] ptr) mem) -> (MOVFload [off1+off2] {sym} ptr mem)
+(MOVFload [off1] {sym} (SUBconst [off2] ptr) mem) -> (MOVFload [off1-off2] {sym} ptr mem)
 (MOVDload [off1] {sym} (ADDconst [off2] ptr) mem) -> (MOVDload [off1+off2] {sym} ptr mem)
+(MOVDload [off1] {sym} (SUBconst [off2] ptr) mem) -> (MOVDload [off1-off2] {sym} ptr mem)
 
 (MOVBstore [off1] {sym} (ADDconst [off2] ptr) val mem) -> (MOVBstore [off1+off2] {sym} ptr val mem)
+(MOVBstore [off1] {sym} (SUBconst [off2] ptr) val mem) -> (MOVBstore [off1-off2] {sym} ptr val mem)
 (MOVHstore [off1] {sym} (ADDconst [off2] ptr) val mem) -> (MOVHstore [off1+off2] {sym} ptr val mem)
+(MOVHstore [off1] {sym} (SUBconst [off2] ptr) val mem) -> (MOVHstore [off1-off2] {sym} ptr val mem)
 (MOVWstore [off1] {sym} (ADDconst [off2] ptr) val mem) -> (MOVWstore [off1+off2] {sym} ptr val mem)
+(MOVWstore [off1] {sym} (SUBconst [off2] ptr) val mem) -> (MOVWstore [off1-off2] {sym} ptr val mem)
 (MOVFstore [off1] {sym} (ADDconst [off2] ptr) val mem) -> (MOVFstore [off1+off2] {sym} ptr val mem)
+(MOVFstore [off1] {sym} (SUBconst [off2] ptr) val mem) -> (MOVFstore [off1-off2] {sym} ptr val mem)
 (MOVDstore [off1] {sym} (ADDconst [off2] ptr) val mem) -> (MOVDstore [off1+off2] {sym} ptr val mem)
+(MOVDstore [off1] {sym} (SUBconst [off2] ptr) val mem) -> (MOVDstore [off1-off2] {sym} ptr val mem)
 
 (MOVBload [off1] {sym1} (MOVWaddr [off2] {sym2} ptr) mem) && canMergeSym(sym1,sym2) ->
 	(MOVBload [off1+off2] {mergeSym(sym1,sym2)} ptr mem)
@@ -481,16 +500,13 @@
 (MOVWloadshiftRA ptr idx [c] (MOVWstoreshiftRA ptr2 idx [d] x _)) && c==d && isSamePtr(ptr, ptr2) -> x
 
 // fold constant into arithmatic ops
-(ADD (MOVWconst [c]) x) -> (ADDconst [c] x)
 (ADD x (MOVWconst [c])) -> (ADDconst [c] x)
 (SUB (MOVWconst [c]) x) -> (RSBconst [c] x)
 (SUB x (MOVWconst [c])) -> (SUBconst [c] x)
 (RSB (MOVWconst [c]) x) -> (SUBconst [c] x)
 (RSB x (MOVWconst [c])) -> (RSBconst [c] x)
 
-(ADDS (MOVWconst [c]) x) -> (ADDSconst [c] x)
 (ADDS x (MOVWconst [c])) -> (ADDSconst [c] x)
-(SUBS (MOVWconst [c]) x) -> (RSBSconst [c] x)
 (SUBS x (MOVWconst [c])) -> (SUBSconst [c] x)
 
 (ADC (MOVWconst [c]) x flags) -> (ADCconst [c] x flags)
@@ -498,11 +514,8 @@
 (SBC (MOVWconst [c]) x flags) -> (RSCconst [c] x flags)
 (SBC x (MOVWconst [c]) flags) -> (SBCconst [c] x flags)
 
-(AND (MOVWconst [c]) x) -> (ANDconst [c] x)
 (AND x (MOVWconst [c])) -> (ANDconst [c] x)
-(OR (MOVWconst [c]) x) -> (ORconst [c] x)
-(OR x (MOVWconst [c])) -> (ORconst [c] x)
-(XOR (MOVWconst [c]) x) -> (XORconst [c] x)
+(OR  x (MOVWconst [c])) -> (ORconst [c] x)
 (XOR x (MOVWconst [c])) -> (XORconst [c] x)
 (BIC x (MOVWconst [c])) -> (BICconst [c] x)
 
@@ -561,17 +574,6 @@
 (MUL x (MOVWconst [c])) && c%5 == 0 && isPowerOfTwo(c/5) && is32Bit(c) -> (SLLconst [log2(c/5)] (ADDshiftLL <x.Type> x x [2]))
 (MUL x (MOVWconst [c])) && c%7 == 0 && isPowerOfTwo(c/7) && is32Bit(c) -> (SLLconst [log2(c/7)] (RSBshiftLL <x.Type> x x [3]))
 (MUL x (MOVWconst [c])) && c%9 == 0 && isPowerOfTwo(c/9) && is32Bit(c) -> (SLLconst [log2(c/9)] (ADDshiftLL <x.Type> x x [3]))
-
-(MUL (MOVWconst [c]) x) && int32(c) == -1 -> (RSBconst [0] x)
-(MUL (MOVWconst [0]) _) -> (MOVWconst [0])
-(MUL (MOVWconst [1]) x) -> x
-(MUL (MOVWconst [c]) x) && isPowerOfTwo(c) -> (SLLconst [log2(c)] x)
-(MUL (MOVWconst [c]) x) && isPowerOfTwo(c-1) && int32(c) >= 3 -> (ADDshiftLL x x [log2(c-1)])
-(MUL (MOVWconst [c]) x) && isPowerOfTwo(c+1) && int32(c) >= 7 -> (RSBshiftLL x x [log2(c+1)])
-(MUL (MOVWconst [c]) x) && c%3 == 0 && isPowerOfTwo(c/3) && is32Bit(c) -> (SLLconst [log2(c/3)] (ADDshiftLL <x.Type> x x [1]))
-(MUL (MOVWconst [c]) x) && c%5 == 0 && isPowerOfTwo(c/5) && is32Bit(c) -> (SLLconst [log2(c/5)] (ADDshiftLL <x.Type> x x [2]))
-(MUL (MOVWconst [c]) x) && c%7 == 0 && isPowerOfTwo(c/7) && is32Bit(c) -> (SLLconst [log2(c/7)] (RSBshiftLL <x.Type> x x [3]))
-(MUL (MOVWconst [c]) x) && c%9 == 0 && isPowerOfTwo(c/9) && is32Bit(c) -> (SLLconst [log2(c/9)] (ADDshiftLL <x.Type> x x [3]))
 
 (MULA x (MOVWconst [c]) a) && int32(c) == -1 -> (SUB a x)
 (MULA _ (MOVWconst [0]) a) -> a
@@ -794,6 +796,8 @@
 (BICconst [c] _) && int32(c)==-1 -> (MOVWconst [0])
 
 // generic constant folding
+(ADDconst [c] x) && !isARMImmRot(uint32(c)) && isARMImmRot(uint32(-c)) -> (SUBconst [int64(int32(-c))] x)
+(SUBconst [c] x) && !isARMImmRot(uint32(c)) && isARMImmRot(uint32(-c)) -> (ADDconst [int64(int32(-c))] x)
 (ADDconst [c] (MOVWconst [d])) -> (MOVWconst [int64(int32(c+d))])
 (ADDconst [c] (ADDconst [d] x)) -> (ADDconst [int64(int32(c+d))] x)
 (ADDconst [c] (SUBconst [d] x)) -> (ADDconst [int64(int32(c-d))] x)
@@ -826,6 +830,7 @@
 (XORconst [c] (MOVWconst [d])) -> (MOVWconst [c^d])
 (XORconst [c] (XORconst [d] x)) -> (XORconst [c^d] x)
 (BICconst [c] (MOVWconst [d])) -> (MOVWconst [d&^c])
+(BICconst [c] (BICconst [d] x)) -> (BICconst [int64(int32(c|d))] x)
 (MVN (MOVWconst [c])) -> (MOVWconst [^c])
 (MOVBreg (MOVWconst [c])) -> (MOVWconst [int64(int8(c))])
 (MOVBUreg (MOVWconst [c])) -> (MOVWconst [int64(uint8(c))])
@@ -835,17 +840,11 @@
 
 // absorb shifts into ops
 (ADD x (SLLconst [c] y)) -> (ADDshiftLL x y [c])
-(ADD (SLLconst [c] y) x) -> (ADDshiftLL x y [c])
 (ADD x (SRLconst [c] y)) -> (ADDshiftRL x y [c])
-(ADD (SRLconst [c] y) x) -> (ADDshiftRL x y [c])
 (ADD x (SRAconst [c] y)) -> (ADDshiftRA x y [c])
-(ADD (SRAconst [c] y) x) -> (ADDshiftRA x y [c])
 (ADD x (SLL y z)) -> (ADDshiftLLreg x y z)
-(ADD (SLL y z) x) -> (ADDshiftLLreg x y z)
 (ADD x (SRL y z)) -> (ADDshiftRLreg x y z)
-(ADD (SRL y z) x) -> (ADDshiftRLreg x y z)
 (ADD x (SRA y z)) -> (ADDshiftRAreg x y z)
-(ADD (SRA y z) x) -> (ADDshiftRAreg x y z)
 (ADC x (SLLconst [c] y) flags) -> (ADCshiftLL x y [c] flags)
 (ADC (SLLconst [c] y) x flags) -> (ADCshiftLL x y [c] flags)
 (ADC x (SRLconst [c] y) flags) -> (ADCshiftRL x y [c] flags)
@@ -859,17 +858,11 @@
 (ADC x (SRA y z) flags) -> (ADCshiftRAreg x y z flags)
 (ADC (SRA y z) x flags) -> (ADCshiftRAreg x y z flags)
 (ADDS x (SLLconst [c] y)) -> (ADDSshiftLL x y [c])
-(ADDS (SLLconst [c] y) x) -> (ADDSshiftLL x y [c])
 (ADDS x (SRLconst [c] y)) -> (ADDSshiftRL x y [c])
-(ADDS (SRLconst [c] y) x) -> (ADDSshiftRL x y [c])
 (ADDS x (SRAconst [c] y)) -> (ADDSshiftRA x y [c])
-(ADDS (SRAconst [c] y) x) -> (ADDSshiftRA x y [c])
 (ADDS x (SLL y z)) -> (ADDSshiftLLreg x y z)
-(ADDS (SLL y z) x) -> (ADDSshiftLLreg x y z)
 (ADDS x (SRL y z)) -> (ADDSshiftRLreg x y z)
-(ADDS (SRL y z) x) -> (ADDSshiftRLreg x y z)
 (ADDS x (SRA y z)) -> (ADDSshiftRAreg x y z)
-(ADDS (SRA y z) x) -> (ADDSshiftRAreg x y z)
 (SUB x (SLLconst [c] y)) -> (SUBshiftLL x y [c])
 (SUB (SLLconst [c] y) x) -> (RSBshiftLL x y [c])
 (SUB x (SRLconst [c] y)) -> (SUBshiftRL x y [c])
@@ -919,43 +912,24 @@
 (RSB x (SRA y z)) -> (RSBshiftRAreg x y z)
 (RSB (SRA y z) x) -> (SUBshiftRAreg x y z)
 (AND x (SLLconst [c] y)) -> (ANDshiftLL x y [c])
-(AND (SLLconst [c] y) x) -> (ANDshiftLL x y [c])
 (AND x (SRLconst [c] y)) -> (ANDshiftRL x y [c])
-(AND (SRLconst [c] y) x) -> (ANDshiftRL x y [c])
 (AND x (SRAconst [c] y)) -> (ANDshiftRA x y [c])
-(AND (SRAconst [c] y) x) -> (ANDshiftRA x y [c])
 (AND x (SLL y z)) -> (ANDshiftLLreg x y z)
-(AND (SLL y z) x) -> (ANDshiftLLreg x y z)
 (AND x (SRL y z)) -> (ANDshiftRLreg x y z)
-(AND (SRL y z) x) -> (ANDshiftRLreg x y z)
 (AND x (SRA y z)) -> (ANDshiftRAreg x y z)
-(AND (SRA y z) x) -> (ANDshiftRAreg x y z)
 (OR x (SLLconst [c] y)) -> (ORshiftLL x y [c])
-(OR (SLLconst [c] y) x) -> (ORshiftLL x y [c])
 (OR x (SRLconst [c] y)) -> (ORshiftRL x y [c])
-(OR (SRLconst [c] y) x) -> (ORshiftRL x y [c])
 (OR x (SRAconst [c] y)) -> (ORshiftRA x y [c])
-(OR (SRAconst [c] y) x) -> (ORshiftRA x y [c])
 (OR x (SLL y z)) -> (ORshiftLLreg x y z)
-(OR (SLL y z) x) -> (ORshiftLLreg x y z)
 (OR x (SRL y z)) -> (ORshiftRLreg x y z)
-(OR (SRL y z) x) -> (ORshiftRLreg x y z)
 (OR x (SRA y z)) -> (ORshiftRAreg x y z)
-(OR (SRA y z) x) -> (ORshiftRAreg x y z)
 (XOR x (SLLconst [c] y)) -> (XORshiftLL x y [c])
-(XOR (SLLconst [c] y) x) -> (XORshiftLL x y [c])
 (XOR x (SRLconst [c] y)) -> (XORshiftRL x y [c])
-(XOR (SRLconst [c] y) x) -> (XORshiftRL x y [c])
 (XOR x (SRAconst [c] y)) -> (XORshiftRA x y [c])
-(XOR (SRAconst [c] y) x) -> (XORshiftRA x y [c])
 (XOR x (SRRconst [c] y)) -> (XORshiftRR x y [c])
-(XOR (SRRconst [c] y) x) -> (XORshiftRR x y [c])
 (XOR x (SLL y z)) -> (XORshiftLLreg x y z)
-(XOR (SLL y z) x) -> (XORshiftLLreg x y z)
 (XOR x (SRL y z)) -> (XORshiftRLreg x y z)
-(XOR (SRL y z) x) -> (XORshiftRLreg x y z)
 (XOR x (SRA y z)) -> (XORshiftRAreg x y z)
-(XOR (SRA y z) x) -> (XORshiftRAreg x y z)
 (BIC x (SLLconst [c] y)) -> (BICshiftLL x y [c])
 (BIC x (SRLconst [c] y)) -> (BICshiftRL x y [c])
 (BIC x (SRAconst [c] y)) -> (BICshiftRA x y [c])
@@ -1207,7 +1181,6 @@
 
 // generic simplifications
 (ADD x (RSBconst [0] y)) -> (SUB x y)
-(ADD (RSBconst [0] y) x) -> (SUB x y)
 (ADD <t> (RSBconst [c] x) (RSBconst [d] y)) -> (RSBconst [c+d] (ADD <t> x y))
 (SUB x x) -> (MOVWconst [0])
 (RSB x x) -> (MOVWconst [0])
@@ -1217,10 +1190,8 @@
 (BIC x x) -> (MOVWconst [0])
 
 (ADD (MUL x y) a) -> (MULA x y a)
-(ADD a (MUL x y)) -> (MULA x y a)
 
 (AND x (MVN y)) -> (BIC x y)
-(AND (MVN y) x) -> (BIC x y)
 
 // simplification with *shift ops
 (SUBshiftLL x (SLLconst x [c]) [d]) && c==d -> (MOVWconst [0])
@@ -1242,11 +1213,8 @@
 (BICshiftRL x (SRLconst x [c]) [d]) && c==d -> (MOVWconst [0])
 (BICshiftRA x (SRAconst x [c]) [d]) && c==d -> (MOVWconst [0])
 (AND x (MVNshiftLL y [c])) -> (BICshiftLL x y [c])
-(AND (MVNshiftLL y [c]) x) -> (BICshiftLL x y [c])
 (AND x (MVNshiftRL y [c])) -> (BICshiftRL x y [c])
-(AND (MVNshiftRL y [c]) x) -> (BICshiftRL x y [c])
 (AND x (MVNshiftRA y [c])) -> (BICshiftRA x y [c])
-(AND (MVNshiftRA y [c]) x) -> (BICshiftRA x y [c])
 
 // floating point optimizations
 (CMPF x (MOVFconst [0])) -> (CMPF0 x)

@@ -139,6 +139,7 @@ func closeDB(t testing.TB, db *DB) {
 			t.Errorf("Error closing fakeConn: %v", err)
 		}
 	})
+	db.mu.Lock()
 	for i, dc := range db.freeConn {
 		if n := len(dc.openStmt); n > 0 {
 			// Just a sanity check. This is legal in
@@ -149,6 +150,8 @@ func closeDB(t testing.TB, db *DB) {
 			t.Errorf("while closing db, freeConn %d/%d had %d open stmts; want 0", i, len(db.freeConn), n)
 		}
 	}
+	db.mu.Unlock()
+
 	err := db.Close()
 	if err != nil {
 		t.Fatalf("error closing DB: %v", err)
@@ -1298,6 +1301,69 @@ func TestTxErrBadConn(t *testing.T) {
 	}
 }
 
+func TestConnQuery(t *testing.T) {
+	db := newTestDB(t, "people")
+	defer closeDB(t, db)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	var name string
+	err = conn.QueryRowContext(ctx, "SELECT|people|name|age=?", 3).Scan(&name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "Chris" {
+		t.Fatalf("unexpected result, got %q want Chris", name)
+	}
+
+	err = conn.PingContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConnTx(t *testing.T) {
+	db := newTestDB(t, "people")
+	defer closeDB(t, db)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertName, insertAge := "Nancy", 33
+	_, err = tx.ExecContext(ctx, "INSERT|people|name=?,age=?,photo=APHOTO", insertName, insertAge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = tx.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var selectName string
+	err = conn.QueryRowContext(ctx, "SELECT|people|name|age=?", insertAge).Scan(&selectName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selectName != insertName {
+		t.Fatalf("got %q want %q", selectName, insertName)
+	}
+}
+
 // Tests fix for issue 2542, that we release a lock when querying on
 // a closed connection.
 func TestIssue2542Deadlock(t *testing.T) {
@@ -2338,6 +2404,28 @@ func TestManyErrBadConn(t *testing.T) {
 	if err = stmt.Close(); err != nil {
 		t.Fatal(err)
 	}
+
+	// Conn
+	db = manyErrBadConnSetup()
+	defer closeDB(t, db)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = conn.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ping
+	db = manyErrBadConnSetup()
+	defer closeDB(t, db)
+	err = db.PingContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // golang.org/issue/5718
@@ -2956,6 +3044,46 @@ func TestIssue18429(t *testing.T) {
 	wg.Wait()
 }
 
+// TestIssue20160 attempts to test a short context life on a stmt Query.
+func TestIssue20160(t *testing.T) {
+	db := newTestDB(t, "people")
+	defer closeDB(t, db)
+
+	ctx := context.Background()
+	sem := make(chan bool, 20)
+	var wg sync.WaitGroup
+
+	const milliWait = 30
+
+	stmt, err := db.PrepareContext(ctx, "SELECT|people|name|")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stmt.Close()
+
+	for i := 0; i < 100; i++ {
+		sem <- true
+		wg.Add(1)
+		go func() {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
+			ctx, cancel := context.WithTimeout(ctx, time.Duration(rand.Intn(milliWait))*time.Millisecond)
+			defer cancel()
+
+			// This is expected to give a cancel error most, but not all the time.
+			// Test failure will happen with a panic or other race condition being
+			// reported.
+			rows, _ := stmt.QueryContext(ctx)
+			if rows != nil {
+				rows.Close()
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 // TestIssue18719 closes the context right before use. The sql.driverConn
 // will nil out the ci on close in a lock, but if another process uses it right after
 // it will panic with on the nil ref.
@@ -2997,7 +3125,6 @@ func TestIssue18719(t *testing.T) {
 	// canceled context.
 
 	cancel()
-	waitForRowsClose(t, rows, 5*time.Second)
 }
 
 func TestConcurrency(t *testing.T) {
@@ -3152,6 +3279,24 @@ func TestPing(t *testing.T) {
 	driver.fails = true
 	if err := db.Ping(); err != pingError {
 		t.Errorf("err was %#v, expected pingError", err)
+	}
+}
+
+// Issue 18101.
+func TestTypedString(t *testing.T) {
+	db := newTestDB(t, "people")
+	defer closeDB(t, db)
+
+	type Str string
+	var scanned Str
+
+	err := db.QueryRow("SELECT|people|name|name=?", "Alice").Scan(&scanned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := Str("Alice")
+	if scanned != expected {
+		t.Errorf("expected %+v, got %+v", expected, scanned)
 	}
 }
 

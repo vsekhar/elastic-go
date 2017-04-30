@@ -15,14 +15,38 @@ import "strings"
 //  - When doing sub-register operations, we try to write the whole
 //    destination register to avoid a partial-register write.
 //  - Unused portions of AuxInt (or the Val portion of ValAndOff) are
-//    filled by sign-extending the used portion.  Users of AuxInt which interpret
+//    filled by sign-extending the used portion. Users of AuxInt which interpret
 //    AuxInt as unsigned (e.g. shifts) must be careful.
-
-// Suffixes encode the bit width of various instructions.
-// D (double word) = 64 bit (frequently omitted)
-// W (word)        = 32 bit
-// H (half word)   = 16 bit
-// B (byte)        = 8 bit
+//  - The SB 'register' is implemented using instruction-relative addressing. This
+//    places some limitations on when and how memory operands that are addressed
+//    relative to SB can be used:
+//
+//     1. Pseudo-instructions do not always map to a single machine instruction when
+//        using the SB 'register' to address data. This is because many machine
+//        instructions do not have relative long (RL suffix) equivalents. For example,
+//        ADDload, which is assembled as AG.
+//
+//     2. Loads and stores using relative addressing require the data be aligned
+//        according to its size (8-bytes for double words, 4-bytes for words
+//        and so on).
+//
+//    We can always work around these by inserting LARL instructions (load address
+//    relative long) in the assembler, but typically this results in worse code
+//    generation because the address can't be re-used. Inserting instructions in the
+//    assembler also means clobbering the temp register and it is a long-term goal
+//    to prevent the compiler doing this so that it can be allocated as a normal
+//    register.
+//
+// For more information about the z/Architecture, the instruction set and the
+// addressing modes it supports take a look at the z/Architecture Principles of
+// Operation: http://publibfp.boulder.ibm.com/epubs/pdf/dz9zr010.pdf
+//
+// Suffixes encode the bit width of pseudo-instructions.
+// D (double word)  = 64 bit (frequently omitted)
+// W (word)         = 32 bit
+// H (half word)    = 16 bit
+// B (byte)         = 8 bit
+// S (single prec.) = 32 bit (double precision is omitted)
 
 // copied from ../../s390x/reg.go
 var regNamesS390X = []string{
@@ -216,8 +240,8 @@ func init() {
 		{name: "MULLDload", argLength: 3, reg: gpopload, asm: "MULLD", aux: "SymOff", resultInArg0: true, clobberFlags: true, faultOnNilArg1: true, symEffect: "Read"}, // arg0 * *arg1. arg2=mem
 		{name: "MULLWload", argLength: 3, reg: gpopload, asm: "MULLW", aux: "SymOff", resultInArg0: true, clobberFlags: true, faultOnNilArg1: true, symEffect: "Read"}, // arg0 * *arg1. arg2=mem
 
-		{name: "MULHD", argLength: 2, reg: gp21, asm: "MULHD", typ: "Int64", resultInArg0: true, clobberFlags: true},   // (arg0 * arg1) >> width
-		{name: "MULHDU", argLength: 2, reg: gp21, asm: "MULHDU", typ: "Int64", resultInArg0: true, clobberFlags: true}, // (arg0 * arg1) >> width
+		{name: "MULHD", argLength: 2, reg: gp21, asm: "MULHD", typ: "Int64", commutative: true, resultInArg0: true, clobberFlags: true},   // (arg0 * arg1) >> width
+		{name: "MULHDU", argLength: 2, reg: gp21, asm: "MULHDU", typ: "Int64", commutative: true, resultInArg0: true, clobberFlags: true}, // (arg0 * arg1) >> width
 
 		{name: "DIVD", argLength: 2, reg: gp21, asm: "DIVD", resultInArg0: true, clobberFlags: true},   // arg0 / arg1
 		{name: "DIVW", argLength: 2, reg: gp21, asm: "DIVW", resultInArg0: true, clobberFlags: true},   // arg0 / arg1
@@ -265,24 +289,24 @@ func init() {
 		{name: "FCMPS", argLength: 2, reg: fp2flags, asm: "CEBR", typ: "Flags"}, // arg0 compare to arg1, f32
 		{name: "FCMP", argLength: 2, reg: fp2flags, asm: "FCMPU", typ: "Flags"}, // arg0 compare to arg1, f64
 
-		{name: "SLD", argLength: 2, reg: sh21, asm: "SLD"},                    // arg0 << arg1, shift amount is mod 64
-		{name: "SLW", argLength: 2, reg: sh21, asm: "SLW"},                    // arg0 << arg1, shift amount is mod 32
-		{name: "SLDconst", argLength: 1, reg: gp11, asm: "SLD", aux: "Int64"}, // arg0 << auxint, shift amount 0-63
-		{name: "SLWconst", argLength: 1, reg: gp11, asm: "SLW", aux: "Int32"}, // arg0 << auxint, shift amount 0-31
+		{name: "SLD", argLength: 2, reg: sh21, asm: "SLD"},                   // arg0 << arg1, shift amount is mod 64
+		{name: "SLW", argLength: 2, reg: sh21, asm: "SLW"},                   // arg0 << arg1, shift amount is mod 32
+		{name: "SLDconst", argLength: 1, reg: gp11, asm: "SLD", aux: "Int8"}, // arg0 << auxint, shift amount 0-63
+		{name: "SLWconst", argLength: 1, reg: gp11, asm: "SLW", aux: "Int8"}, // arg0 << auxint, shift amount 0-31
 
-		{name: "SRD", argLength: 2, reg: sh21, asm: "SRD"},                    // unsigned arg0 >> arg1, shift amount is mod 64
-		{name: "SRW", argLength: 2, reg: sh21, asm: "SRW"},                    // unsigned arg0 >> arg1, shift amount is mod 32
-		{name: "SRDconst", argLength: 1, reg: gp11, asm: "SRD", aux: "Int64"}, // unsigned arg0 >> auxint, shift amount 0-63
-		{name: "SRWconst", argLength: 1, reg: gp11, asm: "SRW", aux: "Int32"}, // unsigned arg0 >> auxint, shift amount 0-31
+		{name: "SRD", argLength: 2, reg: sh21, asm: "SRD"},                   // unsigned arg0 >> arg1, shift amount is mod 64
+		{name: "SRW", argLength: 2, reg: sh21, asm: "SRW"},                   // unsigned arg0 >> arg1, shift amount is mod 32
+		{name: "SRDconst", argLength: 1, reg: gp11, asm: "SRD", aux: "Int8"}, // unsigned arg0 >> auxint, shift amount 0-63
+		{name: "SRWconst", argLength: 1, reg: gp11, asm: "SRW", aux: "Int8"}, // unsigned arg0 >> auxint, shift amount 0-31
 
 		// Arithmetic shifts clobber flags.
-		{name: "SRAD", argLength: 2, reg: sh21, asm: "SRAD", clobberFlags: true},                    // signed arg0 >> arg1, shift amount is mod 64
-		{name: "SRAW", argLength: 2, reg: sh21, asm: "SRAW", clobberFlags: true},                    // signed arg0 >> arg1, shift amount is mod 32
-		{name: "SRADconst", argLength: 1, reg: gp11, asm: "SRAD", aux: "Int64", clobberFlags: true}, // signed arg0 >> auxint, shift amount 0-63
-		{name: "SRAWconst", argLength: 1, reg: gp11, asm: "SRAW", aux: "Int32", clobberFlags: true}, // signed arg0 >> auxint, shift amount 0-31
+		{name: "SRAD", argLength: 2, reg: sh21, asm: "SRAD", clobberFlags: true},                   // signed arg0 >> arg1, shift amount is mod 64
+		{name: "SRAW", argLength: 2, reg: sh21, asm: "SRAW", clobberFlags: true},                   // signed arg0 >> arg1, shift amount is mod 32
+		{name: "SRADconst", argLength: 1, reg: gp11, asm: "SRAD", aux: "Int8", clobberFlags: true}, // signed arg0 >> auxint, shift amount 0-63
+		{name: "SRAWconst", argLength: 1, reg: gp11, asm: "SRAW", aux: "Int8", clobberFlags: true}, // signed arg0 >> auxint, shift amount 0-31
 
-		{name: "RLLGconst", argLength: 1, reg: gp11, asm: "RLLG", aux: "Int64"}, // arg0 rotate left auxint, rotate amount 0-63
-		{name: "RLLconst", argLength: 1, reg: gp11, asm: "RLL", aux: "Int32"},   // arg0 rotate left auxint, rotate amount 0-31
+		{name: "RLLGconst", argLength: 1, reg: gp11, asm: "RLLG", aux: "Int8"}, // arg0 rotate left auxint, rotate amount 0-63
+		{name: "RLLconst", argLength: 1, reg: gp11, asm: "RLL", aux: "Int8"},   // arg0 rotate left auxint, rotate amount 0-31
 
 		// unary ops
 		{name: "NEG", argLength: 1, reg: gp11, asm: "NEG", clobberFlags: true},   // -arg0
@@ -364,20 +388,20 @@ func init() {
 
 		// indexed loads/stores
 		// TODO(mundaym): add sign-extended indexed loads
-		{name: "MOVBZloadidx", argLength: 3, reg: gploadidx, asm: "MOVBZ", aux: "SymOff", clobberFlags: true, symEffect: "Read"},      // load a byte from arg0+arg1+auxint+aux. arg2=mem
-		{name: "MOVHZloadidx", argLength: 3, reg: gploadidx, asm: "MOVHZ", aux: "SymOff", clobberFlags: true, symEffect: "Read"},      // load 2 bytes from arg0+arg1+auxint+aux. arg2=mem
-		{name: "MOVWZloadidx", argLength: 3, reg: gploadidx, asm: "MOVWZ", aux: "SymOff", clobberFlags: true, symEffect: "Read"},      // load 4 bytes from arg0+arg1+auxint+aux. arg2=mem
-		{name: "MOVDloadidx", argLength: 3, reg: gploadidx, asm: "MOVD", aux: "SymOff", clobberFlags: true, symEffect: "Read"},        // load 8 bytes from arg0+arg1+auxint+aux. arg2=mem
-		{name: "MOVHBRloadidx", argLength: 3, reg: gploadidx, asm: "MOVHBR", aux: "SymOff", clobberFlags: true, symEffect: "Read"},    // load 2 bytes from arg0+arg1+auxint+aux. arg2=mem. Reverse bytes.
-		{name: "MOVWBRloadidx", argLength: 3, reg: gploadidx, asm: "MOVWBR", aux: "SymOff", clobberFlags: true, symEffect: "Read"},    // load 4 bytes from arg0+arg1+auxint+aux. arg2=mem. Reverse bytes.
-		{name: "MOVDBRloadidx", argLength: 3, reg: gploadidx, asm: "MOVDBR", aux: "SymOff", clobberFlags: true, symEffect: "Read"},    // load 8 bytes from arg0+arg1+auxint+aux. arg2=mem. Reverse bytes.
-		{name: "MOVBstoreidx", argLength: 4, reg: gpstoreidx, asm: "MOVB", aux: "SymOff", clobberFlags: true, symEffect: "Write"},     // store byte in arg2 to arg0+arg1+auxint+aux. arg3=mem
-		{name: "MOVHstoreidx", argLength: 4, reg: gpstoreidx, asm: "MOVH", aux: "SymOff", clobberFlags: true, symEffect: "Write"},     // store 2 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem
-		{name: "MOVWstoreidx", argLength: 4, reg: gpstoreidx, asm: "MOVW", aux: "SymOff", clobberFlags: true, symEffect: "Write"},     // store 4 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem
-		{name: "MOVDstoreidx", argLength: 4, reg: gpstoreidx, asm: "MOVD", aux: "SymOff", clobberFlags: true, symEffect: "Write"},     // store 8 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem
-		{name: "MOVHBRstoreidx", argLength: 4, reg: gpstoreidx, asm: "MOVHBR", aux: "SymOff", clobberFlags: true, symEffect: "Write"}, // store 2 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem. Reverse bytes.
-		{name: "MOVWBRstoreidx", argLength: 4, reg: gpstoreidx, asm: "MOVWBR", aux: "SymOff", clobberFlags: true, symEffect: "Write"}, // store 4 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem. Reverse bytes.
-		{name: "MOVDBRstoreidx", argLength: 4, reg: gpstoreidx, asm: "MOVDBR", aux: "SymOff", clobberFlags: true, symEffect: "Write"}, // store 8 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem. Reverse bytes.
+		{name: "MOVBZloadidx", argLength: 3, reg: gploadidx, commutative: true, asm: "MOVBZ", aux: "SymOff", typ: "UInt8", clobberFlags: true, symEffect: "Read"},   // load a byte from arg0+arg1+auxint+aux. arg2=mem
+		{name: "MOVHZloadidx", argLength: 3, reg: gploadidx, commutative: true, asm: "MOVHZ", aux: "SymOff", typ: "UInt16", clobberFlags: true, symEffect: "Read"},  // load 2 bytes from arg0+arg1+auxint+aux. arg2=mem
+		{name: "MOVWZloadidx", argLength: 3, reg: gploadidx, commutative: true, asm: "MOVWZ", aux: "SymOff", typ: "UInt32", clobberFlags: true, symEffect: "Read"},  // load 4 bytes from arg0+arg1+auxint+aux. arg2=mem
+		{name: "MOVDloadidx", argLength: 3, reg: gploadidx, commutative: true, asm: "MOVD", aux: "SymOff", typ: "UInt64", clobberFlags: true, symEffect: "Read"},    // load 8 bytes from arg0+arg1+auxint+aux. arg2=mem
+		{name: "MOVHBRloadidx", argLength: 3, reg: gploadidx, commutative: true, asm: "MOVHBR", aux: "SymOff", typ: "Int16", clobberFlags: true, symEffect: "Read"}, // load 2 bytes from arg0+arg1+auxint+aux. arg2=mem. Reverse bytes.
+		{name: "MOVWBRloadidx", argLength: 3, reg: gploadidx, commutative: true, asm: "MOVWBR", aux: "SymOff", typ: "Int32", clobberFlags: true, symEffect: "Read"}, // load 4 bytes from arg0+arg1+auxint+aux. arg2=mem. Reverse bytes.
+		{name: "MOVDBRloadidx", argLength: 3, reg: gploadidx, commutative: true, asm: "MOVDBR", aux: "SymOff", typ: "Int64", clobberFlags: true, symEffect: "Read"}, // load 8 bytes from arg0+arg1+auxint+aux. arg2=mem. Reverse bytes.
+		{name: "MOVBstoreidx", argLength: 4, reg: gpstoreidx, commutative: true, asm: "MOVB", aux: "SymOff", clobberFlags: true, symEffect: "Write"},                // store byte in arg2 to arg0+arg1+auxint+aux. arg3=mem
+		{name: "MOVHstoreidx", argLength: 4, reg: gpstoreidx, commutative: true, asm: "MOVH", aux: "SymOff", clobberFlags: true, symEffect: "Write"},                // store 2 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem
+		{name: "MOVWstoreidx", argLength: 4, reg: gpstoreidx, commutative: true, asm: "MOVW", aux: "SymOff", clobberFlags: true, symEffect: "Write"},                // store 4 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem
+		{name: "MOVDstoreidx", argLength: 4, reg: gpstoreidx, commutative: true, asm: "MOVD", aux: "SymOff", clobberFlags: true, symEffect: "Write"},                // store 8 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem
+		{name: "MOVHBRstoreidx", argLength: 4, reg: gpstoreidx, commutative: true, asm: "MOVHBR", aux: "SymOff", clobberFlags: true, symEffect: "Write"},            // store 2 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem. Reverse bytes.
+		{name: "MOVWBRstoreidx", argLength: 4, reg: gpstoreidx, commutative: true, asm: "MOVWBR", aux: "SymOff", clobberFlags: true, symEffect: "Write"},            // store 4 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem. Reverse bytes.
+		{name: "MOVDBRstoreidx", argLength: 4, reg: gpstoreidx, commutative: true, asm: "MOVDBR", aux: "SymOff", clobberFlags: true, symEffect: "Write"},            // store 8 bytes in arg2 to arg0+arg1+auxint+aux. arg3=mem. Reverse bytes.
 
 		// For storeconst ops, the AuxInt field encodes both
 		// the value to store and an address offset of the store.
@@ -389,7 +413,7 @@ func init() {
 
 		{name: "CLEAR", argLength: 2, reg: regInfo{inputs: []regMask{ptr, 0}}, asm: "CLEAR", aux: "SymValAndOff", typ: "Mem", clobberFlags: true, faultOnNilArg0: true, symEffect: "Write"},
 
-		{name: "CALLstatic", argLength: 1, reg: regInfo{clobbers: callerSave}, aux: "SymOff", clobberFlags: true, call: true, symEffect: "None"},                            // call static function aux.(*gc.Sym).  arg0=mem, auxint=argsize, returns mem
+		{name: "CALLstatic", argLength: 1, reg: regInfo{clobbers: callerSave}, aux: "SymOff", clobberFlags: true, call: true, symEffect: "None"},                            // call static function aux.(*obj.LSym).  arg0=mem, auxint=argsize, returns mem
 		{name: "CALLclosure", argLength: 3, reg: regInfo{inputs: []regMask{ptrsp, buildReg("R12"), 0}, clobbers: callerSave}, aux: "Int64", clobberFlags: true, call: true}, // call function via closure.  arg0=codeptr, arg1=closure, arg2=mem, auxint=argsize, returns mem
 		{name: "CALLinter", argLength: 2, reg: regInfo{inputs: []regMask{ptr}, clobbers: callerSave}, aux: "Int64", clobberFlags: true, call: true},                         // call fn by pointer.  arg0=codeptr, arg1=mem, auxint=argsize, returns mem
 

@@ -10,7 +10,9 @@ import (
 	"bufio"
 	"bytes"
 	"cmd/compile/internal/ssa"
+	"cmd/compile/internal/types"
 	"cmd/internal/obj"
+	"cmd/internal/objabi"
 	"cmd/internal/src"
 	"cmd/internal/sys"
 	"flag"
@@ -50,26 +52,40 @@ var (
 // Each option accepts an optional argument, as in "gcprog=2"
 var debugtab = []struct {
 	name string
+	help string
 	val  interface{} // must be *int or *string
 }{
-	{"append", &Debug_append},         // print information about append compilation
-	{"closure", &Debug_closure},       // print information about closure compilation
-	{"disablenil", &disable_checknil}, // disable nil checks
-	{"dclstack", &debug_dclstack},     // run internal dclstack checks
-	{"gcprog", &Debug_gcprog},         // print dump of GC programs
-	{"nil", &Debug_checknil},          // print information about nil checks
-	{"panic", &Debug_panic},           // do not hide any compiler panic
-	{"slice", &Debug_slice},           // print information about slice compilation
-	{"typeassert", &Debug_typeassert}, // print information about type assertion inlining
-	{"wb", &Debug_wb},                 // print information about write barriers
-	{"export", &Debug_export},         // print export data
-	{"pctab", &Debug_pctab},           // print named pc-value table
-	{"remote", &Debug_remote},         // print remote allocation decisions
+	{"append", "print information about append compilation", &Debug_append},
+	{"closure", "print information about closure compilation", &Debug_closure},
+	{"disablenil", "disable nil checks", &disable_checknil},
+	{"dclstack", "run internal dclstack check", &debug_dclstack},
+	{"gcprog", "print dump of GC programs", &Debug_gcprog},
+	{"nil", "print information about nil checks", &Debug_checknil},
+	{"panic", "do not hide any compiler panic", &Debug_panic},
+	{"slice", "print information about slice compilation", &Debug_slice},
+	{"typeassert", "print information about type assertion inlining", &Debug_typeassert},
+	{"wb", "print information about write barriers", &Debug_wb},
+	{"export", "print export data", &Debug_export},
+	{"pctab", "print named pc-value table", &Debug_pctab},
+	{"remote", "print remote allocation decisions", &Debug_remote},
 }
+
+const debugHelpHeader = `usage: -d arg[,arg]* and arg is <key>[=<value>]
+
+<key> is one of:
+
+`
+
+const debugHelpFooter = `
+<value> is key-specific.
+
+Key "pctab" supports values:
+	"pctospadj", "pctofile", "pctoline", "pctoinline", "pctopcdata"
+`
 
 func usage() {
 	fmt.Printf("usage: compile [options] file.go...\n")
-	obj.Flagprint(1)
+	objabi.Flagprint(1)
 	Exit(2)
 }
 
@@ -86,7 +102,7 @@ func hidePanic() {
 }
 
 func doversion() {
-	p := obj.Expstring()
+	p := objabi.Expstring()
 	if p == "X:none" {
 		p = ""
 	}
@@ -94,7 +110,7 @@ func doversion() {
 	if p != "" {
 		sep = " "
 	}
-	fmt.Printf("compile version %s%s%s\n", obj.Version, sep, p)
+	fmt.Printf("compile version %s%s%s\n", objabi.Version, sep, p)
 	os.Exit(0)
 }
 
@@ -119,97 +135,86 @@ func Main(archInit func(*Arch)) {
 	archInit(&thearch)
 
 	Ctxt = obj.Linknew(thearch.LinkArch)
-	Ctxt.DebugInfo = debuginfo
 	Ctxt.DiagFunc = yyerror
 	Ctxt.Bso = bufio.NewWriter(os.Stdout)
 
-	localpkg = mkpkg("")
+	localpkg = types.NewPkg("", "")
 	localpkg.Prefix = "\"\""
 
 	// pseudo-package, for scoping
-	builtinpkg = mkpkg("go.builtin")
-	builtinpkg.Prefix = "go.builtin" // not go%2ebuiltin
+	builtinpkg = types.NewPkg("go.builtin", "") // TODO(gri) name this package go.builtin?
+	builtinpkg.Prefix = "go.builtin"            // not go%2ebuiltin
 
 	// pseudo-package, accessed by import "unsafe"
-	unsafepkg = mkpkg("unsafe")
-	unsafepkg.Name = "unsafe"
+	unsafepkg = types.NewPkg("unsafe", "unsafe")
 
 	// Pseudo-package that contains the compiler's builtin
 	// declarations for package runtime. These are declared in a
 	// separate package to avoid conflicts with package runtime's
 	// actual declarations, which may differ intentionally but
 	// insignificantly.
-	Runtimepkg = mkpkg("go.runtime")
-	Runtimepkg.Name = "runtime"
+	Runtimepkg = types.NewPkg("go.runtime", "runtime")
 	Runtimepkg.Prefix = "runtime"
 
 	// pseudo-packages used in symbol tables
-	itabpkg = mkpkg("go.itab")
-	itabpkg.Name = "go.itab"
+	itabpkg = types.NewPkg("go.itab", "go.itab")
 	itabpkg.Prefix = "go.itab" // not go%2eitab
 
-	itablinkpkg = mkpkg("go.itablink")
-	itablinkpkg.Name = "go.itablink"
+	itablinkpkg = types.NewPkg("go.itablink", "go.itablink")
 	itablinkpkg.Prefix = "go.itablink" // not go%2eitablink
 
-	trackpkg = mkpkg("go.track")
-	trackpkg.Name = "go.track"
+	trackpkg = types.NewPkg("go.track", "go.track")
 	trackpkg.Prefix = "go.track" // not go%2etrack
 
-	typepkg = mkpkg("type")
-	typepkg.Name = "type"
-
 	// pseudo-package used for map zero values
-	mappkg = mkpkg("go.map")
-	mappkg.Name = "go.map"
+	mappkg = types.NewPkg("go.map", "go.map")
 	mappkg.Prefix = "go.map"
 
-	Nacl = obj.GOOS == "nacl"
-	if Nacl {
-		flag_largemodel = true
-	}
+	Nacl = objabi.GOOS == "nacl"
 
 	flag.BoolVar(&compiling_runtime, "+", false, "compiling runtime")
-	obj.Flagcount("%", "debug non-static initializers", &Debug['%'])
-	obj.Flagcount("B", "disable bounds checking", &Debug['B'])
-	obj.Flagcount("C", "disable printing of columns in error messages", &Debug['C']) // TODO(gri) remove eventually
+	objabi.Flagcount("%", "debug non-static initializers", &Debug['%'])
+	objabi.Flagcount("B", "disable bounds checking", &Debug['B'])
+	objabi.Flagcount("C", "disable printing of columns in error messages", &Debug['C']) // TODO(gri) remove eventually
 	flag.StringVar(&localimport, "D", "", "set relative `path` for local imports")
-	obj.Flagcount("E", "debug symbol export", &Debug['E'])
-	obj.Flagfn1("I", "add `directory` to import search path", addidir)
-	obj.Flagcount("K", "debug missing line numbers", &Debug['K'])
-	obj.Flagcount("N", "disable optimizations", &Debug['N'])
+	objabi.Flagcount("E", "debug symbol export", &Debug['E'])
+	objabi.Flagfn1("I", "add `directory` to import search path", addidir)
+	objabi.Flagcount("K", "debug missing line numbers", &Debug['K'])
+	objabi.Flagcount("N", "disable optimizations", &Debug['N'])
 	flag.BoolVar(&Debug_asm, "S", false, "print assembly listing")
-	obj.Flagfn0("V", "print compiler version", doversion)
-	obj.Flagcount("W", "debug parse tree after type checking", &Debug['W'])
+	objabi.Flagfn0("V", "print compiler version", doversion)
+	objabi.Flagcount("W", "debug parse tree after type checking", &Debug['W'])
 	flag.StringVar(&asmhdr, "asmhdr", "", "write assembly header to `file`")
 	flag.StringVar(&buildid, "buildid", "", "record `id` as the build id in the export metadata")
+	flag.IntVar(&nBackendWorkers, "c", 1, "concurrency during compilation, 1 means no concurrency")
 	flag.BoolVar(&pure_go, "complete", false, "compiling complete package (no C or assembly)")
-	flag.StringVar(&debugstr, "d", "", "print debug information about items in `list`")
-	obj.Flagcount("e", "no limit on number of errors reported", &Debug['e'])
-	obj.Flagcount("f", "debug stack frames", &Debug['f'])
-	obj.Flagcount("h", "halt on error", &Debug['h'])
-	obj.Flagcount("i", "debug line number stack", &Debug['i'])
-	obj.Flagfn1("importmap", "add `definition` of the form source=actual to import map", addImportMap)
+	flag.StringVar(&debugstr, "d", "", "print debug information about items in `list`; try -d help")
+	flag.BoolVar(&flagDWARF, "dwarf", true, "generate DWARF symbols")
+	objabi.Flagcount("e", "no limit on number of errors reported", &Debug['e'])
+	objabi.Flagcount("f", "debug stack frames", &Debug['f'])
+	objabi.Flagcount("h", "halt on error", &Debug['h'])
+	objabi.Flagcount("i", "debug line number stack", &Debug['i'])
+	objabi.Flagfn1("importmap", "add `definition` of the form source=actual to import map", addImportMap)
 	flag.StringVar(&flag_installsuffix, "installsuffix", "", "set pkg directory `suffix`")
-	obj.Flagcount("j", "debug runtime-initialized variables", &Debug['j'])
-	obj.Flagcount("l", "disable inlining", &Debug['l'])
+	objabi.Flagcount("j", "debug runtime-initialized variables", &Debug['j'])
+	objabi.Flagcount("l", "disable inlining", &Debug['l'])
 	flag.StringVar(&linkobj, "linkobj", "", "write linker-specific object to `file`")
-	obj.Flagcount("live", "debug liveness analysis", &debuglive)
-	obj.Flagcount("m", "print optimization decisions", &Debug['m'])
+	objabi.Flagcount("live", "debug liveness analysis", &debuglive)
+	objabi.Flagcount("m", "print optimization decisions", &Debug['m'])
 	flag.BoolVar(&flag_msan, "msan", false, "build code compatible with C/C++ memory sanitizer")
 	flag.BoolVar(&dolinkobj, "dolinkobj", true, "generate linker-specific objects; if false, some invalid code may compile")
 	flag.BoolVar(&nolocalimports, "nolocalimports", false, "reject local (relative) imports")
 	flag.StringVar(&outfile, "o", "", "write output to `file`")
 	flag.StringVar(&myimportpath, "p", "", "set expected package import `path`")
 	flag.BoolVar(&writearchive, "pack", false, "write package file instead of object file")
-	obj.Flagcount("r", "debug generated wrappers", &Debug['r'])
+	objabi.Flagcount("r", "debug generated wrappers", &Debug['r'])
 	flag.BoolVar(&flag_race, "race", false, "enable race detector")
 	flag.BoolVar(&flag_remote, "remote", false, "compile a remote binary")
-	obj.Flagcount("s", "warn about composite literals that can be simplified", &Debug['s'])
+	objabi.Flagcount("s", "warn about composite literals that can be simplified", &Debug['s'])
 	flag.StringVar(&pathPrefix, "trimpath", "", "remove `prefix` from recorded source file paths")
 	flag.BoolVar(&safemode, "u", false, "reject unsafe code")
 	flag.BoolVar(&Debug_vlog, "v", false, "increase debug verbosity")
-	obj.Flagcount("w", "debug type checking", &Debug['w'])
+	objabi.Flagcount("w", "debug type checking", &Debug['w'])
 	flag.BoolVar(&use_writebarrier, "wb", true, "enable write barrier")
 	var flag_shared bool
 	var flag_dynlink bool
@@ -217,15 +222,14 @@ func Main(archInit func(*Arch)) {
 		flag.BoolVar(&flag_shared, "shared", false, "generate code that can be linked into a shared library")
 		flag.BoolVar(&flag_dynlink, "dynlink", false, "support references to Go symbols defined in other shared libraries")
 	}
-	if thearch.LinkArch.Family == sys.AMD64 {
-		flag.BoolVar(&flag_largemodel, "largemodel", false, "generate code that assumes a large memory model")
-	}
 	flag.StringVar(&cpuprofile, "cpuprofile", "", "write cpu profile to `file`")
 	flag.StringVar(&memprofile, "memprofile", "", "write memory profile to `file`")
 	flag.Int64Var(&memprofilerate, "memprofilerate", 0, "set runtime.MemProfileRate to `rate`")
 	flag.StringVar(&traceprofile, "traceprofile", "", "write an execution trace to `file`")
+	flag.StringVar(&blockprofile, "blockprofile", "", "write block profile to `file`")
+	flag.StringVar(&mutexprofile, "mutexprofile", "", "write mutex profile to `file`")
 	flag.StringVar(&benchfile, "bench", "", "append benchmark times to `file`")
-	obj.Flagparse(usage)
+	objabi.Flagparse(usage)
 
 	Ctxt.Flag_shared = flag_dynlink || flag_shared
 	Ctxt.Flag_dynlink = flag_dynlink
@@ -233,10 +237,15 @@ func Main(archInit func(*Arch)) {
 
 	Ctxt.Debugasm = Debug_asm
 	Ctxt.Debugvlog = Debug_vlog
+	if flagDWARF {
+		Ctxt.DebugInfo = debuginfo
+	}
 
-	if flag.NArg() < 1 {
+	if flag.NArg() < 1 && debugstr != "help" && debugstr != "ssa/help" {
 		usage()
 	}
+
+	thearch.LinkArch.Init(Ctxt)
 
 	if outfile == "" {
 		p := flag.Arg(0)
@@ -261,12 +270,10 @@ func Main(archInit func(*Arch)) {
 	startProfile()
 
 	if flag_race {
-		racepkg = mkpkg("runtime/race")
-		racepkg.Name = "race"
+		racepkg = types.NewPkg("runtime/race", "race")
 	}
 	if flag_msan {
-		msanpkg = mkpkg("runtime/msan")
-		msanpkg.Name = "msan"
+		msanpkg = types.NewPkg("runtime/msan", "msan")
 	}
 	if flag_race && flag_msan {
 		log.Fatal("cannot use both -race and -msan")
@@ -280,8 +287,7 @@ func Main(archInit func(*Arch)) {
 		}
 
 		// real package, referred to by generated remote variable accesses
-		remotepkg = mkpkg("internal/remote")
-		remotepkg.Name = "remote"
+		remotepkg = types.NewPkg("internal/remote", "remote")
 	}
 	if flag_remote && !dolinkobj {
 		log.Fatal("-remote requires generating compiler and linker objects")
@@ -290,6 +296,12 @@ func Main(archInit func(*Arch)) {
 	if compiling_runtime && Debug['N'] != 0 {
 		log.Fatal("cannot disable optimizations while compiling runtime")
 	}
+	if nBackendWorkers < 1 {
+		log.Fatalf("-c must be at least 1, got %d", nBackendWorkers)
+	}
+	if nBackendWorkers > 1 && !concurrentBackendAllowed() {
+		log.Fatalf("cannot use concurrent backend compilation with provided flags; invoked as %v", os.Args)
+	}
 
 	// parse -d argument
 	if debugstr != "" {
@@ -297,6 +309,23 @@ func Main(archInit func(*Arch)) {
 		for _, name := range strings.Split(debugstr, ",") {
 			if name == "" {
 				continue
+			}
+			// display help about the -d option itself and quit
+			if name == "help" {
+				fmt.Printf(debugHelpHeader)
+				maxLen := len("ssa/help")
+				for _, t := range debugtab {
+					if len(t.name) > maxLen {
+						maxLen = len(t.name)
+					}
+				}
+				for _, t := range debugtab {
+					fmt.Printf("\t%-*s\t%s\n", maxLen, t.name, t.help)
+				}
+				// ssa options have their own help
+				fmt.Printf("\t%-*s\t%s\n", maxLen, "ssa/help", "print help about SSA debugging")
+				fmt.Printf(debugHelpFooter)
+				os.Exit(0)
 			}
 			val, valstring, haveInt := 1, "", true
 			if i := strings.IndexAny(name, "=:"); i >= 0 {
@@ -358,15 +387,41 @@ func Main(archInit func(*Arch)) {
 		Debug['l'] = 1 - Debug['l']
 	}
 
-	Widthint = thearch.LinkArch.IntSize
 	Widthptr = thearch.LinkArch.PtrSize
 	Widthreg = thearch.LinkArch.RegSize
 
+	// initialize types package
+	// (we need to do this to break dependencies that otherwise
+	// would lead to import cycles)
+	types.Widthptr = Widthptr
+	types.Dowidth = dowidth
+	types.Fatalf = Fatalf
+	types.Sconv = func(s *types.Sym, flag, mode int) string {
+		return sconv(s, FmtFlag(flag), fmtMode(mode))
+	}
+	types.Tconv = func(t *types.Type, flag, mode, depth int) string {
+		return tconv(t, FmtFlag(flag), fmtMode(mode), depth)
+	}
+	types.FormatSym = func(sym *types.Sym, s fmt.State, verb rune, mode int) {
+		symFormat(sym, s, verb, fmtMode(mode))
+	}
+	types.FormatType = func(t *types.Type, s fmt.State, verb rune, mode int) {
+		typeFormat(t, s, verb, fmtMode(mode))
+	}
+	types.TypeLinkSym = func(t *types.Type) *obj.LSym {
+		return typenamesym(t).Linksym()
+	}
+	types.FmtLeft = int(FmtLeft)
+	types.FmtUnsigned = int(FmtUnsigned)
+	types.FErr = FErr
+	types.Ctxt = Ctxt
+
 	initUniverse()
 
-	blockgen = 1
 	dclcontext = PEXTERN
 	nerrors = 0
+
+	autogeneratedPos = makePos(src.NewFileBase("<autogenerated>", "<autogenerated>"), 1, 0)
 
 	timings.Start("fe", "loadsys")
 	loadsys()
@@ -429,6 +484,9 @@ func Main(archInit func(*Arch)) {
 			if nerrors != 0 {
 				Curfn.Nbody.Set(nil) // type errors; do not compile
 			}
+			// Now that we've checked whether n terminates,
+			// we can eliminate some obviously dead code.
+			deadcode(Curfn)
 			fcount++
 		}
 	}
@@ -543,8 +601,25 @@ func Main(archInit func(*Arch)) {
 			fninit(xtop)
 		}
 
+		compileFunctions()
+
+		// We autogenerate and compile some small functions
+		// such as method wrappers and equality/hash routines
+		// while exporting code.
+		// Disable concurrent compilation from here on,
+		// at least until this convoluted structure has been unwound.
+		nBackendWorkers = 1
+
 		if compiling_runtime {
 			checknowritebarrierrec()
+		}
+
+		// Check whether any of the functions we have compiled have gigantic stack frames.
+		obj.SortSlice(largeStackFrames, func(i, j int) bool {
+			return largeStackFrames[i].Before(largeStackFrames[j])
+		})
+		for _, largePos := range largeStackFrames {
+			yyerrorl(largePos, "stack frame too large (>2GB)")
 		}
 	}
 
@@ -565,6 +640,10 @@ func Main(archInit func(*Arch)) {
 	dumpobj()
 	if asmhdr != "" {
 		dumpasmhdr()
+	}
+
+	if len(compilequeue) != 0 {
+		Fatalf("%d uncompiled functions", len(compilequeue))
 	}
 
 	if nerrors+nsavederrors != 0 {
@@ -588,7 +667,7 @@ func writebench(filename string) error {
 	}
 
 	var buf bytes.Buffer
-	fmt.Fprintln(&buf, "commit:", obj.Version)
+	fmt.Fprintln(&buf, "commit:", objabi.Version)
 	fmt.Fprintln(&buf, "goos:", runtime.GOOS)
 	fmt.Fprintln(&buf, "goarch:", runtime.GOARCH)
 	timings.Write(&buf, "BenchmarkCompile:"+myimportpath+":")
@@ -711,7 +790,7 @@ func findpkg(name string) (file string, ok bool) {
 		}
 	}
 
-	if obj.GOROOT != "" {
+	if objabi.GOROOT != "" {
 		suffix := ""
 		suffixsep := ""
 		if flag_installsuffix != "" {
@@ -725,11 +804,11 @@ func findpkg(name string) (file string, ok bool) {
 			suffix = "msan"
 		}
 
-		file = fmt.Sprintf("%s/pkg/%s_%s%s%s/%s.a", obj.GOROOT, obj.GOOS, obj.GOARCH, suffixsep, suffix, name)
+		file = fmt.Sprintf("%s/pkg/%s_%s%s%s/%s.a", objabi.GOROOT, objabi.GOOS, objabi.GOARCH, suffixsep, suffix, name)
 		if _, err := os.Stat(file); err == nil {
 			return file, true
 		}
-		file = fmt.Sprintf("%s/pkg/%s_%s%s%s/%s.o", obj.GOROOT, obj.GOOS, obj.GOARCH, suffixsep, suffix, name)
+		file = fmt.Sprintf("%s/pkg/%s_%s%s%s/%s.o", objabi.GOROOT, objabi.GOOS, objabi.GOARCH, suffixsep, suffix, name)
 		if _, err := os.Stat(file); err == nil {
 			return file, true
 		}
@@ -742,7 +821,7 @@ func findpkg(name string) (file string, ok bool) {
 // so that the compiler can generate calls to them,
 // but does not make them visible to user code.
 func loadsys() {
-	block = 1
+	types.Block = 1
 
 	inimport = true
 	typecheckok = true
@@ -750,7 +829,7 @@ func loadsys() {
 
 	typs := runtimeTypes()
 	for _, d := range runtimeDecls {
-		sym := Pkglookup(d.name, Runtimepkg)
+		sym := Runtimepkg.Lookup(d.name)
 		typ := typs[d.typ]
 		switch d.tag {
 		case funcTag:
@@ -770,7 +849,7 @@ func loadsys() {
 	inimport = false
 }
 
-func importfile(f *Val) *Pkg {
+func importfile(f *Val) *types.Pkg {
 	path_, ok := f.U.(string)
 	if !ok {
 		yyerror("import path must be a string")
@@ -837,7 +916,7 @@ func importfile(f *Val) *Pkg {
 		errorexit()
 	}
 
-	importpkg := mkpkg(path_)
+	importpkg := types.NewPkg(path_, "")
 	if importpkg.Imported {
 		return importpkg
 	}
@@ -875,7 +954,7 @@ func importfile(f *Val) *Pkg {
 			errorexit()
 		}
 
-		q := fmt.Sprintf("%s %s %s %s", obj.GOOS, obj.GOARCH, obj.Version, obj.Expstring())
+		q := fmt.Sprintf("%s %s %s %s", objabi.GOOS, objabi.GOARCH, objabi.Version, objabi.Expstring())
 		if p[10:] != q {
 			yyerror("import %s: object is [%s] expected [%s]", file, p[10:], q)
 			errorexit()
@@ -982,32 +1061,71 @@ func mkpackage(pkgname string) {
 
 func clearImports() {
 	for _, s := range localpkg.Syms {
-		if s.Def == nil {
+		if asNode(s.Def) == nil {
 			continue
 		}
-		if s.Def.Op == OPACK {
+		if asNode(s.Def).Op == OPACK {
 			// throw away top-level package name leftover
 			// from previous file.
 			// leave s->block set to cause redeclaration
 			// errors if a conflicting top-level name is
 			// introduced by a different file.
-			if !s.Def.Used() && nsyntaxerrors == 0 {
-				pkgnotused(s.Def.Pos, s.Def.Name.Pkg.Path, s.Name)
+			if !asNode(s.Def).Name.Used() && nsyntaxerrors == 0 {
+				pkgnotused(asNode(s.Def).Pos, asNode(s.Def).Name.Pkg.Path, s.Name)
 			}
 			s.Def = nil
 			continue
 		}
 
-		if s.isAlias() {
+		if IsAlias(s) {
 			// throw away top-level name left over
 			// from previous import . "x"
-			if s.Def.Name != nil && s.Def.Name.Pack != nil && !s.Def.Name.Pack.Used() && nsyntaxerrors == 0 {
-				pkgnotused(s.Def.Name.Pack.Pos, s.Def.Name.Pack.Name.Pkg.Path, "")
-				s.Def.Name.Pack.SetUsed(true)
+			if asNode(s.Def).Name != nil && asNode(s.Def).Name.Pack != nil && !asNode(s.Def).Name.Pack.Name.Used() && nsyntaxerrors == 0 {
+				pkgnotused(asNode(s.Def).Name.Pack.Pos, asNode(s.Def).Name.Pack.Name.Pkg.Path, "")
+				asNode(s.Def).Name.Pack.Name.SetUsed(true)
 			}
 
 			s.Def = nil
 			continue
 		}
 	}
+}
+
+func IsAlias(sym *types.Sym) bool {
+	return sym.Def != nil && asNode(sym.Def).Sym != sym
+}
+
+// By default, assume any debug flags are incompatible with concurrent compilation.
+// A few are safe and potentially in common use for normal compiles, though; mark them as such here.
+var concurrentFlagOK = [256]bool{
+	'B': true, // disabled bounds checking
+	'C': true, // disable printing of columns in error messages
+	'e': true, // no limit on errors; errors all come from non-concurrent code
+	'I': true, // add `directory` to import search path
+	'N': true, // disable optimizations
+	'l': true, // disable inlining
+}
+
+func concurrentBackendAllowed() bool {
+	for i, x := range Debug {
+		if x != 0 && !concurrentFlagOK[i] {
+			return false
+		}
+	}
+	// Debug_asm by itself is ok, because all printing occurs
+	// while writing the object file, and that is non-concurrent.
+	// Adding Debug_vlog, however, causes Debug_asm to also print
+	// while flushing the plist, which happens concurrently.
+	if Debug_vlog || debugstr != "" || debuglive > 0 {
+		return false
+	}
+	// TODO: test and add builders for GOEXPERIMENT values, and enable
+	if os.Getenv("GOEXPERIMENT") != "" {
+		return false
+	}
+	// TODO: fix races and enable the following flags
+	if Ctxt.Flag_shared || Ctxt.Flag_dynlink || flag_race {
+		return false
+	}
+	return true
 }

@@ -32,11 +32,17 @@ package x86
 
 import (
 	"cmd/internal/obj"
+	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"encoding/binary"
 	"fmt"
 	"log"
 	"strings"
+)
+
+var (
+	plan9privates *obj.LSym
+	deferreturn   *obj.LSym
 )
 
 // Instruction layout.
@@ -876,19 +882,19 @@ var ymmxmm0f38 = []ytab{
 }
 
 /*
- * You are doasm, holding in your hand a Prog* with p->as set to, say, ACRC32,
- * and p->from and p->to as operands (Addr*).  The linker scans optab to find
- * the entry with the given p->as and then looks through the ytable for that
- * instruction (the second field in the optab struct) for a line whose first
- * two values match the Ytypes of the p->from and p->to operands.  The function
- * oclass in span.c computes the specific Ytype of an operand and then the set
+ * You are doasm, holding in your hand a *obj.Prog with p.As set to, say,
+ * ACRC32, and p.From and p.To as operands (obj.Addr).  The linker scans optab
+ * to find the entry with the given p.As and then looks through the ytable for
+ * that instruction (the second field in the optab struct) for a line whose
+ * first two values match the Ytypes of the p.From and p.To operands.  The
+ * function oclass computes the specific Ytype of an operand and then the set
  * of more general Ytypes that it satisfies is implied by the ycover table, set
- * up in InstInit.  For example, oclass distinguishes the constants 0 and 1
- * from the more general 8-bit constants, but InstInit says
+ * up in instinit.  For example, oclass distinguishes the constants 0 and 1
+ * from the more general 8-bit constants, but instinit says
  *
- *        ycover[Yi0*Ymax + Ys32] = 1;
- *        ycover[Yi1*Ymax + Ys32] = 1;
- *        ycover[Yi8*Ymax + Ys32] = 1;
+ *        ycover[Yi0*Ymax+Ys32] = 1
+ *        ycover[Yi1*Ymax+Ys32] = 1
+ *        ycover[Yi8*Ymax+Ys32] = 1
  *
  * which means that Yi0, Yi1, and Yi8 all count as Ys32 (signed 32)
  * if that's what an instruction can handle.
@@ -902,22 +908,20 @@ var ymmxmm0f38 = []ytab{
  * is, the Ztype) and the z bytes.
  *
  * For example, let's look at AADDL.  The optab line says:
- *        { AADDL,        yaddl,  Px, 0x83,(00),0x05,0x81,(00),0x01,0x03 },
+ *        {AADDL, yaddl, Px, [23]uint8{0x83, 00, 0x05, 0x81, 00, 0x01, 0x03}},
  *
  * and yaddl says
- *        uchar   yaddl[] =
- *        {
- *                Yi8,    Yml,    Zibo_m, 2,
- *                Yi32,   Yax,    Zil_,   1,
- *                Yi32,   Yml,    Zilo_m, 2,
- *                Yrl,    Yml,    Zr_m,   1,
- *                Yml,    Yrl,    Zm_r,   1,
- *                0
- *        };
+ *        var yaddl = []ytab{
+ *                {Yi8, Ynone, Yml, Zibo_m, 2},
+ *                {Yi32, Ynone, Yax, Zil_, 1},
+ *                {Yi32, Ynone, Yml, Zilo_m, 2},
+ *                {Yrl, Ynone, Yml, Zr_m, 1},
+ *                {Yml, Ynone, Yrl, Zm_r, 1},
+ *        }
  *
  * so there are 5 possible types of ADDL instruction that can be laid down, and
  * possible states used to lay them down (Ztype and z pointer, assuming z
- * points at {0x83,(00),0x05,0x81,(00),0x01,0x03}) are:
+ * points at [23]uint8{0x83, 00, 0x05,0x81, 00, 0x01, 0x03}) are:
  *
  *        Yi8, Yml -> Zibo_m, z (0x83, 00)
  *        Yi32, Yax -> Zil_, z+2 (0x05)
@@ -928,7 +932,7 @@ var ymmxmm0f38 = []ytab{
  * The Pconstant in the optab line controls the prefix bytes to emit.  That's
  * relatively straightforward as this program goes.
  *
- * The switch on t[2] in doasm implements the various Z cases.  Zibo_m, for
+ * The switch on yt.zcase in doasm implements the various Z cases.  Zibo_m, for
  * example, is an opcode byte (z[0]) then an asmando (which is some kind of
  * encoded addressing mode for the Yml arg), and then a single immediate byte.
  * Zilo_m is the same but a long (32-bit) immediate.
@@ -941,7 +945,7 @@ var optab =
 	{AAAD, ynone, P32, [23]uint8{0xd5, 0x0a}},
 	{AAAM, ynone, P32, [23]uint8{0xd4, 0x0a}},
 	{AAAS, ynone, P32, [23]uint8{0x3f}},
-	{AADCB, yxorb, Pb, [23]uint8{0x14, 0x80, 02, 0x10, 0x10}},
+	{AADCB, yxorb, Pb, [23]uint8{0x14, 0x80, 02, 0x10, 0x12}},
 	{AADCL, yaddl, Px, [23]uint8{0x83, 02, 0x15, 0x81, 02, 0x11, 0x13}},
 	{AADCQ, yaddl, Pw, [23]uint8{0x83, 02, 0x15, 0x81, 02, 0x11, 0x13}},
 	{AADCW, yaddl, Pe, [23]uint8{0x83, 02, 0x15, 0x81, 02, 0x11, 0x13}},
@@ -1762,18 +1766,18 @@ func spadjop(ctxt *obj.Link, p *obj.Prog, l, q obj.As) obj.As {
 	return q
 }
 
-func span6(ctxt *obj.Link, s *obj.LSym) {
+func span6(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	if s.P != nil {
 		return
 	}
 
 	if ycover[0] == 0 {
-		ctxt.Diag("x86 tables not initialized, call x86.InstInit first")
+		ctxt.Diag("x86 tables not initialized, call x86.instinit first")
 	}
 
 	var asmbuf AsmBuf
 
-	for p := s.Text; p != nil; p = p.Link {
+	for p := s.Func.Text; p != nil; p = p.Link {
 		if p.To.Type == obj.TYPE_BRANCH {
 			if p.Pcond == nil {
 				p.Pcond = p
@@ -1799,7 +1803,7 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 
 	var q *obj.Prog
 	var count int64 // rough count of number of instructions
-	for p := s.Text; p != nil; p = p.Link {
+	for p := s.Func.Text; p != nil; p = p.Link {
 		count++
 		p.Back = 2 // use short branches first time through
 		q = p.Pcond
@@ -1830,10 +1834,6 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 	n := 0
 	var c int32
 	errors := ctxt.Errors
-	var deferreturn *obj.LSym
-	if ctxt.Headtype == obj.Hnacl {
-		deferreturn = obj.Linklookup(ctxt, "runtime.deferreturn", 0)
-	}
 	for {
 		loop := int32(0)
 		for i := range s.R {
@@ -1842,8 +1842,8 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 		s.R = s.R[:0]
 		s.P = s.P[:0]
 		c = 0
-		for p := s.Text; p != nil; p = p.Link {
-			if ctxt.Headtype == obj.Hnacl && p.Isize > 0 {
+		for p := s.Func.Text; p != nil; p = p.Link {
+			if ctxt.Headtype == objabi.Hnacl && p.Isize > 0 {
 
 				// pad everything to avoid crossing 32-byte boundary
 				if c>>5 != (c+int32(p.Isize)-1)>>5 {
@@ -1938,7 +1938,7 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 		}
 	}
 
-	if ctxt.Headtype == obj.Hnacl {
+	if ctxt.Headtype == objabi.Hnacl {
 		c = naclpad(ctxt, s, c, -c&31)
 	}
 
@@ -1965,7 +1965,7 @@ func span6(ctxt *obj.Link, s *obj.LSym) {
 	}
 }
 
-func InstInit() {
+func instinit(ctxt *obj.Link) {
 	if ycover[0] != 0 {
 		// Already initialized; stop now.
 		// This happens in the cmd/asm tests,
@@ -1973,10 +1973,17 @@ func InstInit() {
 		return
 	}
 
+	switch ctxt.Headtype {
+	case objabi.Hplan9:
+		plan9privates = ctxt.Lookup("_privates")
+	case objabi.Hnacl:
+		deferreturn = ctxt.Lookup("runtime.deferreturn")
+	}
+
 	for i := 1; optab[i].as != 0; i++ {
 		c := optab[i].as
 		if opindex[c&obj.AMask] != nil {
-			log.Fatalf("phase error in optab: %d (%v)", i, c)
+			ctxt.Diag("phase error in optab: %d (%v)", i, c)
 		}
 		opindex[c&obj.AMask] = &optab[i]
 	}
@@ -2113,7 +2120,7 @@ func InstInit() {
 	}
 }
 
-var isAndroid = (obj.GOOS == "android")
+var isAndroid = (objabi.GOOS == "android")
 
 func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 	if a.Reg < REG_CS && a.Index < REG_CS { // fast path
@@ -2151,11 +2158,11 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 					}
 					log.Fatalf("unknown TLS base register for %v", ctxt.Headtype)
 
-				case obj.Hdarwin,
-					obj.Hdragonfly,
-					obj.Hfreebsd,
-					obj.Hnetbsd,
-					obj.Hopenbsd:
+				case objabi.Hdarwin,
+					objabi.Hdragonfly,
+					objabi.Hfreebsd,
+					objabi.Hnetbsd,
+					objabi.Hopenbsd:
 					return 0x65 // GS
 				}
 			}
@@ -2164,7 +2171,7 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 			default:
 				log.Fatalf("unknown TLS base register for %v", ctxt.Headtype)
 
-			case obj.Hlinux:
+			case objabi.Hlinux:
 				if isAndroid {
 					return 0x64 // FS
 				}
@@ -2175,14 +2182,14 @@ func prefixof(ctxt *obj.Link, p *obj.Prog, a *obj.Addr) int {
 					return 0x64 // FS
 				}
 
-			case obj.Hdragonfly,
-				obj.Hfreebsd,
-				obj.Hnetbsd,
-				obj.Hopenbsd,
-				obj.Hsolaris:
+			case objabi.Hdragonfly,
+				objabi.Hfreebsd,
+				objabi.Hnetbsd,
+				objabi.Hopenbsd,
+				objabi.Hsolaris:
 				return 0x64 // FS
 
-			case obj.Hdarwin:
+			case objabi.Hdarwin:
 				return 0x65 // GS
 			}
 		}
@@ -2792,13 +2799,13 @@ func vaddr(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r *obj.Reloc) int64 {
 
 		if a.Name == obj.NAME_GOTREF {
 			r.Siz = 4
-			r.Type = obj.R_GOTPCREL
+			r.Type = objabi.R_GOTPCREL
 		} else if isextern(s) || (ctxt.Arch.Family != sys.AMD64 && !ctxt.Flag_shared) {
 			r.Siz = 4
-			r.Type = obj.R_ADDR
+			r.Type = objabi.R_ADDR
 		} else {
 			r.Siz = 4
-			r.Type = obj.R_PCREL
+			r.Type = objabi.R_PCREL
 		}
 
 		r.Off = -1 // caller must fill in
@@ -2814,8 +2821,8 @@ func vaddr(ctxt *obj.Link, p *obj.Prog, a *obj.Addr, r *obj.Reloc) int64 {
 			log.Fatalf("reloc")
 		}
 
-		if !ctxt.Flag_shared || isAndroid || ctxt.Headtype == obj.Hdarwin {
-			r.Type = obj.R_TLS_LE
+		if !ctxt.Flag_shared || isAndroid || ctxt.Headtype == objabi.Hdarwin {
+			r.Type = objabi.R_TLS_LE
 			r.Siz = 4
 			r.Off = -1 // caller must fill in
 			r.Add = a.Offset
@@ -2984,7 +2991,7 @@ func (asmbuf *AsmBuf) asmandsz(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog, a 
 	if REG_AX <= base && base <= REG_R15 {
 		if a.Index == REG_TLS && !ctxt.Flag_shared {
 			rel = obj.Reloc{}
-			rel.Type = obj.R_TLS_LE
+			rel.Type = objabi.R_TLS_LE
 			rel.Siz = 4
 			rel.Sym = nil
 			rel.Add = int64(v)
@@ -3207,7 +3214,7 @@ func isax(a *obj.Addr) bool {
 
 func subreg(p *obj.Prog, from int, to int) {
 	if false { /* debug['Q'] */
-		fmt.Printf("\n%v\ts/%v/%v/\n", p, Rconv(from), Rconv(to))
+		fmt.Printf("\n%v\ts/%v/%v/\n", p, rconv(from), rconv(to))
 	}
 
 	if int(p.From.Reg) == from {
@@ -3617,7 +3624,7 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 			case Zcallindreg:
 				r = obj.Addrel(cursym)
 				r.Off = int32(p.Pc)
-				r.Type = obj.R_CALLIND
+				r.Type = objabi.R_CALLIND
 				r.Siz = 0
 				fallthrough
 
@@ -3778,7 +3785,7 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 				}
 				r = obj.Addrel(cursym)
 				r.Off = int32(p.Pc + int64(asmbuf.Len()))
-				r.Type = obj.R_PCREL
+				r.Type = objabi.R_PCREL
 				r.Siz = 4
 				r.Add = p.To.Offset
 				asmbuf.PutInt32(0)
@@ -3788,9 +3795,9 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 				r = obj.Addrel(cursym)
 				r.Off = int32(p.Pc + int64(asmbuf.Len()))
 				if ctxt.Arch.Family == sys.AMD64 {
-					r.Type = obj.R_PCREL
+					r.Type = objabi.R_PCREL
 				} else {
-					r.Type = obj.R_ADDR
+					r.Type = objabi.R_ADDR
 				}
 				r.Siz = 4
 				r.Add = p.To.Offset
@@ -3822,7 +3829,7 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 				r.Off = int32(p.Pc + int64(asmbuf.Len()))
 				r.Sym = p.To.Sym
 				r.Add = p.To.Offset
-				r.Type = obj.R_CALL
+				r.Type = objabi.R_CALL
 				r.Siz = 4
 				asmbuf.PutInt32(0)
 
@@ -3847,7 +3854,7 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 					r = obj.Addrel(cursym)
 					r.Off = int32(p.Pc + int64(asmbuf.Len()))
 					r.Sym = p.To.Sym
-					r.Type = obj.R_PCREL
+					r.Type = objabi.R_PCREL
 					r.Siz = 4
 					asmbuf.PutInt32(0)
 					break
@@ -4064,8 +4071,8 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 						default:
 							log.Fatalf("unknown TLS base location for %v", ctxt.Headtype)
 
-						case obj.Hlinux,
-							obj.Hnacl:
+						case objabi.Hlinux,
+							objabi.Hnacl:
 							if ctxt.Flag_shared {
 								// Note that this is not generating the same insns as the other cases.
 								//     MOV TLS, dst
@@ -4082,15 +4089,15 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 								asmbuf.Put1(0xe8)
 								r = obj.Addrel(cursym)
 								r.Off = int32(p.Pc + int64(asmbuf.Len()))
-								r.Type = obj.R_CALL
+								r.Type = objabi.R_CALL
 								r.Siz = 4
-								r.Sym = obj.Linklookup(ctxt, "__x86.get_pc_thunk."+strings.ToLower(Rconv(int(dst))), 0)
+								r.Sym = ctxt.Lookup("__x86.get_pc_thunk." + strings.ToLower(rconv(int(dst))))
 								asmbuf.PutInt32(0)
 
 								asmbuf.Put2(0x8B, byte(2<<6|reg[dst]|(reg[dst]<<3)))
 								r = obj.Addrel(cursym)
 								r.Off = int32(p.Pc + int64(asmbuf.Len()))
-								r.Type = obj.R_TLS_IE
+								r.Type = objabi.R_TLS_IE
 								r.Siz = 4
 								r.Add = 2
 								asmbuf.PutInt32(0)
@@ -4107,20 +4114,17 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 									0x8B)
 								asmbuf.asmand(ctxt, cursym, p, &pp.From, &p.To)
 							}
-						case obj.Hplan9:
-							if ctxt.Plan9privates == nil {
-								ctxt.Plan9privates = obj.Linklookup(ctxt, "_privates", 0)
-							}
+						case objabi.Hplan9:
 							pp.From = obj.Addr{}
 							pp.From.Type = obj.TYPE_MEM
 							pp.From.Name = obj.NAME_EXTERN
-							pp.From.Sym = ctxt.Plan9privates
+							pp.From.Sym = plan9privates
 							pp.From.Offset = 0
 							pp.From.Index = REG_NONE
 							asmbuf.Put1(0x8B)
 							asmbuf.asmand(ctxt, cursym, p, &pp.From, &p.To)
 
-						case obj.Hwindows, obj.Hwindowsgui:
+						case objabi.Hwindows:
 							// Windows TLS base is always 0x14(FS).
 							pp.From = p.From
 
@@ -4140,7 +4144,7 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 					default:
 						log.Fatalf("unknown TLS base location for %v", ctxt.Headtype)
 
-					case obj.Hlinux:
+					case objabi.Hlinux:
 						if !ctxt.Flag_shared {
 							log.Fatalf("unknown TLS base location for linux without -shared")
 						}
@@ -4158,26 +4162,23 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 						asmbuf.Put2(0x8B, byte(0x05|(reg[p.To.Reg]<<3)))
 						r = obj.Addrel(cursym)
 						r.Off = int32(p.Pc + int64(asmbuf.Len()))
-						r.Type = obj.R_TLS_IE
+						r.Type = objabi.R_TLS_IE
 						r.Siz = 4
 						r.Add = -4
 						asmbuf.PutInt32(0)
 
-					case obj.Hplan9:
-						if ctxt.Plan9privates == nil {
-							ctxt.Plan9privates = obj.Linklookup(ctxt, "_privates", 0)
-						}
+					case objabi.Hplan9:
 						pp.From = obj.Addr{}
 						pp.From.Type = obj.TYPE_MEM
 						pp.From.Name = obj.NAME_EXTERN
-						pp.From.Sym = ctxt.Plan9privates
+						pp.From.Sym = plan9privates
 						pp.From.Offset = 0
 						pp.From.Index = REG_NONE
 						asmbuf.rexflag |= Pw
 						asmbuf.Put1(0x8B)
 						asmbuf.asmand(ctxt, cursym, p, &pp.From, &p.To)
 
-					case obj.Hsolaris: // TODO(rsc): Delete Hsolaris from list. Should not use this code. See progedit in obj6.c.
+					case objabi.Hsolaris: // TODO(rsc): Delete Hsolaris from list. Should not use this code. See progedit in obj6.c.
 						// TLS base is 0(FS).
 						pp.From = p.From
 
@@ -4192,7 +4193,7 @@ func (asmbuf *AsmBuf) doasm(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 							0x8B)
 						asmbuf.asmand(ctxt, cursym, p, &pp.From, &p.To)
 
-					case obj.Hwindows, obj.Hwindowsgui:
+					case objabi.Hwindows:
 						// Windows TLS base is always 0x28(GS).
 						pp.From = p.From
 
@@ -4317,68 +4318,53 @@ bad:
 // If a is empty, it returns BX to account for MULB-like instructions
 // that might use DX and AX.
 func byteswapreg(ctxt *obj.Link, a *obj.Addr) int {
-	cand := 1
-	canc := cand
-	canb := canc
-	cana := canb
-
+	cana, canb, canc, cand := true, true, true, true
 	if a.Type == obj.TYPE_NONE {
-		cand = 0
-		cana = cand
+		cana, cand = false, false
 	}
 
 	if a.Type == obj.TYPE_REG || ((a.Type == obj.TYPE_MEM || a.Type == obj.TYPE_ADDR) && a.Name == obj.NAME_NONE) {
 		switch a.Reg {
 		case REG_NONE:
-			cand = 0
-			cana = cand
-
+			cana, cand = false, false
 		case REG_AX, REG_AL, REG_AH:
-			cana = 0
-
+			cana = false
 		case REG_BX, REG_BL, REG_BH:
-			canb = 0
-
+			canb = false
 		case REG_CX, REG_CL, REG_CH:
-			canc = 0
-
+			canc = false
 		case REG_DX, REG_DL, REG_DH:
-			cand = 0
+			cand = false
 		}
 	}
 
 	if a.Type == obj.TYPE_MEM || a.Type == obj.TYPE_ADDR {
 		switch a.Index {
 		case REG_AX:
-			cana = 0
-
+			cana = false
 		case REG_BX:
-			canb = 0
-
+			canb = false
 		case REG_CX:
-			canc = 0
-
+			canc = false
 		case REG_DX:
-			cand = 0
+			cand = false
 		}
 	}
 
-	if cana != 0 {
+	switch {
+	case cana:
 		return REG_AX
-	}
-	if canb != 0 {
+	case canb:
 		return REG_BX
-	}
-	if canc != 0 {
+	case canc:
 		return REG_CX
-	}
-	if cand != 0 {
+	case cand:
 		return REG_DX
+	default:
+		ctxt.Diag("impossible byte register")
+		log.Fatalf("bad code")
+		return 0
 	}
-
-	ctxt.Diag("impossible byte register")
-	log.Fatalf("bad code")
-	return 0
 }
 
 func isbadbyte(a *obj.Addr) bool {
@@ -4447,7 +4433,7 @@ func (asmbuf *AsmBuf) nacltrunc(ctxt *obj.Link, reg int) {
 func (asmbuf *AsmBuf) asmins(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 	asmbuf.Reset()
 
-	if ctxt.Headtype == obj.Hnacl && ctxt.Arch.Family == sys.I386 {
+	if ctxt.Headtype == objabi.Hnacl && ctxt.Arch.Family == sys.I386 {
 		switch p.As {
 		case obj.ARET:
 			asmbuf.Put(naclret8)
@@ -4465,7 +4451,7 @@ func (asmbuf *AsmBuf) asmins(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 		}
 	}
 
-	if ctxt.Headtype == obj.Hnacl && ctxt.Arch.Family == sys.AMD64 {
+	if ctxt.Headtype == objabi.Hnacl && ctxt.Arch.Family == sys.AMD64 {
 		if p.As == AREP {
 			asmbuf.rep++
 			return
@@ -4577,10 +4563,10 @@ func (asmbuf *AsmBuf) asmins(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 		if int64(r.Off) < p.Pc {
 			break
 		}
-		if asmbuf.rexflag != 0 {
+		if asmbuf.rexflag != 0 && asmbuf.vexflag == 0 {
 			r.Off++
 		}
-		if r.Type == obj.R_PCREL {
+		if r.Type == objabi.R_PCREL {
 			if ctxt.Arch.Family == sys.AMD64 || p.As == obj.AJMP || p.As == obj.ACALL {
 				// PC-relative addressing is relative to the end of the instruction,
 				// but the relocations applied by the linker are relative to the end
@@ -4598,14 +4584,14 @@ func (asmbuf *AsmBuf) asmins(ctxt *obj.Link, cursym *obj.LSym, p *obj.Prog) {
 				r.Add += int64(r.Off) - p.Pc + int64(r.Siz)
 			}
 		}
-		if r.Type == obj.R_GOTPCREL && ctxt.Arch.Family == sys.I386 {
+		if r.Type == objabi.R_GOTPCREL && ctxt.Arch.Family == sys.I386 {
 			// On 386, R_GOTPCREL makes the same assumptions as R_PCREL.
 			r.Add += int64(r.Off) - p.Pc + int64(r.Siz)
 		}
 
 	}
 
-	if ctxt.Arch.Family == sys.AMD64 && ctxt.Headtype == obj.Hnacl && p.As != ACMPL && p.As != ACMPQ && p.To.Type == obj.TYPE_REG {
+	if ctxt.Arch.Family == sys.AMD64 && ctxt.Headtype == objabi.Hnacl && p.As != ACMPL && p.As != ACMPQ && p.To.Type == obj.TYPE_REG {
 		switch p.To.Reg {
 		case REG_SP:
 			asmbuf.Put(naclspfix)

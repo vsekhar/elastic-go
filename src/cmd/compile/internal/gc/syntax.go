@@ -8,13 +8,15 @@ package gc
 
 import (
 	"cmd/compile/internal/syntax"
+	"cmd/compile/internal/types"
+	"cmd/internal/obj"
 	"cmd/internal/src"
 )
 
 // A Node is a single node in the syntax tree.
 // Actually the syntax tree is a syntax DAG, because there is only one
 // node with Op=ONAME for a given instance of a variable x.
-// The same is true for Op=OTYPE and Op=OLITERAL.
+// The same is true for Op=OTYPE and Op=OLITERAL. See Node.mayBeShared.
 type Node struct {
 	// Tree structure.
 	// Generic recursive walks should follow these fields.
@@ -26,7 +28,7 @@ type Node struct {
 	Rlist Nodes
 
 	// most nodes
-	Type *Type
+	Type *types.Type
 	Orig *Node // original form, for printing, and tracking copies of ONAMEs
 
 	// func
@@ -35,7 +37,7 @@ type Node struct {
 	// ONAME, OTYPE, OPACK, OLABEL, some OLITERAL
 	Name *Name
 
-	Sym *Sym        // various
+	Sym *types.Sym  // various
 	E   interface{} // Opt or Val, see methods below
 
 	// Various. Usually an offset into a struct. For example:
@@ -53,15 +55,8 @@ type Node struct {
 
 	Esc uint16 // EscXXX
 
-	Op        Op
-	Etype     EType // op for OASOP, etype for OTYPE, exclam for export, 6g saved reg, ChanDir for OTCHAN, for OINDEXMAP 1=LHS,0=RHS
-	Class     Class // PPARAM, PAUTO, PEXTERN, etc
-	Embedded  uint8 // ODCLFIELD embedded type
-	Walkdef   uint8 // tracks state during typecheckdef; 2 == loop detected
-	Typecheck uint8 // tracks state during typechecking; 2 == loop detected
-	Initorder uint8
-	Likely    int8 // likeliness of if statement
-	hasVal    int8 // +1 for Val, -1 for Opt, 0 for not yet set
+	Op    Op
+	Etype types.EType // op for OASOP, etype for OTYPE, exclam for export, 6g saved reg, ChanDir for OTCHAN, for OINDEXMAP 1=LHS,0=RHS
 }
 
 // IsAutoTmp indicates if n was created by the compiler as a temporary,
@@ -74,24 +69,41 @@ func (n *Node) IsAutoTmp() bool {
 }
 
 const (
-	nodeHasBreak = 1 << iota
-	nodeIsClosureVar
-	nodeIsOutputParamHeapAddr
-	nodeNoInline  // used internally by inliner to indicate that a function call should not be inlined; set for OCALLFUNC and OCALLMETH only
-	nodeAssigned  // is the variable ever assigned to
-	nodeAddrtaken // address taken, even if not moved to heap
-	nodeImplicit
-	nodeIsddd    // is the argument variadic
-	nodeLocal    // type created in this file (see also Type.Local)
-	nodeDiag     // already printed error about this
-	nodeColas    // OAS resulting from :=
-	nodeNonNil   // guaranteed to be non-nil
-	nodeNoescape // func arguments do not escape; TODO(rsc): move Noescape to Func struct (see CL 7360)
-	nodeBounded  // bounds check unnecessary
-	nodeAddable  // addressable
-	nodeUsed     // for variable/label declared and not used error
-	nodeHasCall  // expression contains a function call
+	nodeClass, _     = iota, 1 << iota // PPARAM, PAUTO, PEXTERN, etc; three bits; first in the list because frequently accessed
+	_, _                               // second nodeClass bit
+	_, _                               // third nodeClass bit
+	nodeWalkdef, _                     // tracks state during typecheckdef; 2 == loop detected; two bits
+	_, _                               // second nodeWalkdef bit
+	nodeTypecheck, _                   // tracks state during typechecking; 2 == loop detected; two bits
+	_, _                               // second nodeTypecheck bit
+	nodeInitorder, _                   // tracks state during init1; two bits
+	_, _                               // second nodeInitorder bit
+	_, nodeHasBreak
+	_, nodeIsClosureVar
+	_, nodeIsOutputParamHeapAddr
+	_, nodeNoInline  // used internally by inliner to indicate that a function call should not be inlined; set for OCALLFUNC and OCALLMETH only
+	_, nodeAssigned  // is the variable ever assigned to
+	_, nodeAddrtaken // address taken, even if not moved to heap
+	_, nodeImplicit
+	_, nodeIsddd    // is the argument variadic
+	_, nodeLocal    // type created in this file (see also Type.Local)
+	_, nodeDiag     // already printed error about this
+	_, nodeColas    // OAS resulting from :=
+	_, nodeNonNil   // guaranteed to be non-nil
+	_, nodeNoescape // func arguments do not escape; TODO(rsc): move Noescape to Func struct (see CL 7360)
+	_, nodeBounded  // bounds check unnecessary
+	_, nodeAddable  // addressable
+	_, nodeHasCall  // expression contains a function call
+	_, nodeLikely   // if statement condition likely
+	_, nodeHasVal   // node.E contains a Val
+	_, nodeHasOpt   // node.E contains an Opt
+	_, nodeEmbedded // ODCLFIELD embedded type
 )
+
+func (n *Node) Class() Class     { return Class(n.flags.get3(nodeClass)) }
+func (n *Node) Walkdef() uint8   { return n.flags.get2(nodeWalkdef) }
+func (n *Node) Typecheck() uint8 { return n.flags.get2(nodeTypecheck) }
+func (n *Node) Initorder() uint8 { return n.flags.get2(nodeInitorder) }
 
 func (n *Node) HasBreak() bool              { return n.flags&nodeHasBreak != 0 }
 func (n *Node) IsClosureVar() bool          { return n.flags&nodeIsClosureVar != 0 }
@@ -108,8 +120,16 @@ func (n *Node) NonNil() bool                { return n.flags&nodeNonNil != 0 }
 func (n *Node) Noescape() bool              { return n.flags&nodeNoescape != 0 }
 func (n *Node) Bounded() bool               { return n.flags&nodeBounded != 0 }
 func (n *Node) Addable() bool               { return n.flags&nodeAddable != 0 }
-func (n *Node) Used() bool                  { return n.flags&nodeUsed != 0 }
 func (n *Node) HasCall() bool               { return n.flags&nodeHasCall != 0 }
+func (n *Node) Likely() bool                { return n.flags&nodeLikely != 0 }
+func (n *Node) HasVal() bool                { return n.flags&nodeHasVal != 0 }
+func (n *Node) HasOpt() bool                { return n.flags&nodeHasOpt != 0 }
+func (n *Node) Embedded() bool              { return n.flags&nodeEmbedded != 0 }
+
+func (n *Node) SetClass(b Class)     { n.flags.set3(nodeClass, uint8(b)) }
+func (n *Node) SetWalkdef(b uint8)   { n.flags.set2(nodeWalkdef, b) }
+func (n *Node) SetTypecheck(b uint8) { n.flags.set2(nodeTypecheck, b) }
+func (n *Node) SetInitorder(b uint8) { n.flags.set2(nodeInitorder, b) }
 
 func (n *Node) SetHasBreak(b bool)              { n.flags.set(nodeHasBreak, b) }
 func (n *Node) SetIsClosureVar(b bool)          { n.flags.set(nodeIsClosureVar, b) }
@@ -126,12 +146,15 @@ func (n *Node) SetNonNil(b bool)                { n.flags.set(nodeNonNil, b) }
 func (n *Node) SetNoescape(b bool)              { n.flags.set(nodeNoescape, b) }
 func (n *Node) SetBounded(b bool)               { n.flags.set(nodeBounded, b) }
 func (n *Node) SetAddable(b bool)               { n.flags.set(nodeAddable, b) }
-func (n *Node) SetUsed(b bool)                  { n.flags.set(nodeUsed, b) }
 func (n *Node) SetHasCall(b bool)               { n.flags.set(nodeHasCall, b) }
+func (n *Node) SetLikely(b bool)                { n.flags.set(nodeLikely, b) }
+func (n *Node) SetHasVal(b bool)                { n.flags.set(nodeHasVal, b) }
+func (n *Node) SetHasOpt(b bool)                { n.flags.set(nodeHasOpt, b) }
+func (n *Node) SetEmbedded(b bool)              { n.flags.set(nodeEmbedded, b) }
 
 // Val returns the Val for the node.
 func (n *Node) Val() Val {
-	if n.hasVal != +1 {
+	if !n.HasVal() {
 		return Val{}
 	}
 	return Val{n.E}
@@ -139,18 +162,18 @@ func (n *Node) Val() Val {
 
 // SetVal sets the Val for the node, which must not have been used with SetOpt.
 func (n *Node) SetVal(v Val) {
-	if n.hasVal == -1 {
+	if n.HasOpt() {
 		Debug['h'] = 1
 		Dump("have Opt", n)
 		Fatalf("have Opt")
 	}
-	n.hasVal = +1
+	n.SetHasVal(true)
 	n.E = v.U
 }
 
 // Opt returns the optimizer data for the node.
 func (n *Node) Opt() interface{} {
-	if n.hasVal != -1 {
+	if !n.HasOpt() {
 		return nil
 	}
 	return n.E
@@ -159,15 +182,15 @@ func (n *Node) Opt() interface{} {
 // SetOpt sets the optimizer data for the node, which must not have been used with SetVal.
 // SetOpt(nil) is ignored for Vals to simplify call sites that are clearing Opts.
 func (n *Node) SetOpt(x interface{}) {
-	if x == nil && n.hasVal >= 0 {
+	if x == nil && n.HasVal() {
 		return
 	}
-	if n.hasVal == +1 {
+	if n.HasVal() {
 		Debug['h'] = 1
 		Dump("have Val", n)
 		Fatalf("have Val")
 	}
-	n.hasVal = -1
+	n.SetHasOpt(true)
 	n.E = x
 }
 
@@ -179,17 +202,36 @@ func (n *Node) SetIota(x int64) {
 	n.Xoffset = x
 }
 
+// mayBeShared reports whether n may occur in multiple places in the AST.
+// Extra care must be taken when mutating such a node.
+func (n *Node) mayBeShared() bool {
+	switch n.Op {
+	case ONAME, OLITERAL, OTYPE:
+		return true
+	}
+	return false
+}
+
+// funcname returns the name of the function n.
+func (n *Node) funcname() string {
+	if n == nil || n.Func == nil || n.Func.Nname == nil {
+		return "<nil>"
+	}
+	return n.Func.Nname.Sym.Name
+}
+
 // Name holds Node fields used only by named nodes (ONAME, OTYPE, OPACK, OLABEL, some OLITERAL).
 type Name struct {
-	Pack      *Node  // real package for import . names
-	Pkg       *Pkg   // pkg for OPACK nodes
-	Defn      *Node  // initializing assignment
-	Curfn     *Node  // function for local variables
-	Param     *Param // additional fields for ONAME, OTYPE
-	Decldepth int32  // declaration loop depth, increased for every loop or label
-	Vargen    int32  // unique name for ONAME within a function.  Function outputs are numbered starting at one.
+	Pack      *Node      // real package for import . names
+	Pkg       *types.Pkg // pkg for OPACK nodes
+	Defn      *Node      // initializing assignment
+	Curfn     *Node      // function for local variables
+	Param     *Param     // additional fields for ONAME, OTYPE
+	Decldepth int32      // declaration loop depth, increased for every loop or label
+	Vargen    int32      // unique name for ONAME within a function.  Function outputs are numbered starting at one.
 	Funcdepth int32
 
+	used  bool // for variable declared and not used error
 	flags bitset8
 }
 
@@ -208,6 +250,7 @@ func (n *Name) Byval() bool     { return n.flags&nameByval != 0 }
 func (n *Name) Needzero() bool  { return n.flags&nameNeedzero != 0 }
 func (n *Name) Keepalive() bool { return n.flags&nameKeepalive != 0 }
 func (n *Name) AutoTemp() bool  { return n.flags&nameAutoTemp != 0 }
+func (n *Name) Used() bool      { return n.used }
 
 func (n *Name) SetCaptured(b bool)  { n.flags.set(nameCaptured, b) }
 func (n *Name) SetReadonly(b bool)  { n.flags.set(nameReadonly, b) }
@@ -215,6 +258,7 @@ func (n *Name) SetByval(b bool)     { n.flags.set(nameByval, b) }
 func (n *Name) SetNeedzero(b bool)  { n.flags.set(nameNeedzero, b) }
 func (n *Name) SetKeepalive(b bool) { n.flags.set(nameKeepalive, b) }
 func (n *Name) SetAutoTemp(b bool)  { n.flags.set(nameAutoTemp, b) }
+func (n *Name) SetUsed(b bool)      { n.used = b }
 
 type Param struct {
 	Ntype    *Node
@@ -224,7 +268,7 @@ type Param struct {
 	Stackcopy *Node // the PPARAM/PPARAMOUT on-stack slot (moved func params only)
 
 	// ONAME PPARAM
-	Field *Field // TFIELD in arg struct
+	Field *types.Field // TFIELD in arg struct
 
 	// ONAME closure linkage
 	// Consider:
@@ -307,7 +351,7 @@ type Param struct {
 
 // Func holds Node fields used only with function-like nodes.
 type Func struct {
-	Shortname  *Sym
+	Shortname  *types.Sym
 	Enter      Nodes // for example, allocate and initialize memory for escaping parameters
 	Exit       Nodes
 	Cvars      Nodes   // closure params
@@ -315,11 +359,12 @@ type Func struct {
 	Inldcl     Nodes   // copy of dcl for use in inlining
 	Closgen    int
 	Outerfunc  *Node // outer function (for closure)
-	FieldTrack map[*Sym]struct{}
+	FieldTrack map[*types.Sym]struct{}
 	Ntype      *Node // signature
 	Top        int   // top context (Ecall, Eproc, etc)
 	Closure    *Node // OCLOSURE <-> ODCLFUNC
 	Nname      *Node
+	lsym       *obj.LSym
 
 	Inl     Nodes // copy of the body for use in inlining
 	InlCost int32
@@ -382,7 +427,7 @@ const (
 	OADDSTR          // +{List} (string addition, list elements are strings)
 	OADDR            // &Left
 	OANDAND          // Left && Right
-	OAPPEND          // append(List)
+	OAPPEND          // append(List); after walk, Left may contain elem type descriptor
 	OARRAYBYTESTR    // Type(Left) (Type is string, Left is a []byte)
 	OARRAYBYTESTRTMP // Type(Left) (Type is string, Left is a []byte, ephemeral)
 	OARRAYRUNESTR    // Type(Left) (Type is string, Left is a []rune)
@@ -430,8 +475,8 @@ const (
 	ODOTMETH   // Left.Sym (Left is non-interface, Right is method name)
 	ODOTINTER  // Left.Sym (Left is interface, Right is method name)
 	OXDOT      // Left.Sym (before rewrite to one of the preceding)
-	ODOTTYPE   // Left.Right or Left.Type (.Right during parsing, .Type once resolved)
-	ODOTTYPE2  // Left.Right or Left.Type (.Right during parsing, .Type once resolved; on rhs of OAS2DOTTYPE)
+	ODOTTYPE   // Left.Right or Left.Type (.Right during parsing, .Type once resolved); after walk, .Right contains address of interface type descriptor and .Right.Right contains address of concrete type descriptor
+	ODOTTYPE2  // Left.Right or Left.Type (.Right during parsing, .Type once resolved; on rhs of OAS2DOTTYPE); after walk, .Right contains address of interface type descriptor
 	OEQ        // Left == Right
 	ONE        // Left != Right
 	OLT        // Left < Right

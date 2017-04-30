@@ -270,7 +270,9 @@ func (b *profileBuilder) addCPUData(data []uint64, tags []unsafe.Pointer) error 
 		if data[0] != 3 || data[2] == 0 {
 			return fmt.Errorf("malformed profile")
 		}
-		b.period = int64(data[2]) * 1000
+		// data[2] is sampling rate in Hz. Convert to sampling
+		// period in nanoseconds.
+		b.period = 1e9 / int64(data[2])
 		b.havePeriod = true
 		data = data[3:]
 	}
@@ -337,6 +339,15 @@ func (b *profileBuilder) build() error {
 		values[0] = e.count
 		values[1] = e.count * b.period
 
+		var labels func()
+		if e.tag != nil {
+			labels = func() {
+				for k, v := range *(*labelMap)(e.tag) {
+					b.pbLabel(tagSample_Label, k, v, 0)
+				}
+			}
+		}
+
 		locs = locs[:0]
 		for i, addr := range e.stk {
 			// Addresses from stack traces point to the next instruction after
@@ -351,7 +362,7 @@ func (b *profileBuilder) build() error {
 			}
 			locs = append(locs, l)
 		}
-		b.pbSample(values, locs, nil)
+		b.pbSample(values, locs, labels)
 	}
 
 	// TODO: Anything for tagProfile_DropFrames?
@@ -368,7 +379,10 @@ func (b *profileBuilder) build() error {
 // when emitting locations.
 func (b *profileBuilder) readMapping() {
 	data, _ := ioutil.ReadFile("/proc/self/maps")
+	parseProcSelfMaps(data, b.addMapping)
+}
 
+func parseProcSelfMaps(data []byte, addMapping func(lo, hi, offset uint64, file, buildID string)) {
 	// $ cat /proc/self/maps
 	// 00400000-0040b000 r-xp 00000000 fc:01 787766                             /bin/cat
 	// 0060a000-0060b000 r--p 0000a000 fc:01 787766                             /bin/cat
@@ -437,12 +451,19 @@ func (b *profileBuilder) readMapping() {
 		if err != nil {
 			continue
 		}
-		next() // dev
-		next() // inode
+		next()          // dev
+		inode := next() // inode
 		if line == nil {
 			continue
 		}
 		file := string(line)
+		if len(inode) == 1 && inode[0] == '0' && file == "" {
+			// Huge-page text mappings list the initial fragment of
+			// mapped but unpopulated memory as being inode 0.
+			// Don't report that part.
+			// But [vdso] and [vsyscall] are inode 0, so let non-empty file names through.
+			continue
+		}
 
 		// TODO: pprof's remapMappingIDs makes two adjustments:
 		// 1. If there is an /anon_hugepage mapping first and it is
@@ -454,7 +475,11 @@ func (b *profileBuilder) readMapping() {
 		// enter the mappings into b.mem in the first place.
 
 		buildID, _ := elfBuildID(file)
-		b.mem = append(b.mem, memMap{uintptr(lo), uintptr(hi)})
-		b.pbMapping(tagProfile_Mapping, uint64(len(b.mem)), lo, hi, offset, file, buildID)
+		addMapping(lo, hi, offset, file, buildID)
 	}
+}
+
+func (b *profileBuilder) addMapping(lo, hi, offset uint64, file, buildID string) {
+	b.mem = append(b.mem, memMap{uintptr(lo), uintptr(hi)})
+	b.pbMapping(tagProfile_Mapping, uint64(len(b.mem)), lo, hi, offset, file, buildID)
 }

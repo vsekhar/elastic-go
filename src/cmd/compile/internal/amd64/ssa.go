@@ -189,6 +189,8 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		ssa.OpAMD64SHLQ, ssa.OpAMD64SHLL,
 		ssa.OpAMD64SHRQ, ssa.OpAMD64SHRL, ssa.OpAMD64SHRW, ssa.OpAMD64SHRB,
 		ssa.OpAMD64SARQ, ssa.OpAMD64SARL, ssa.OpAMD64SARW, ssa.OpAMD64SARB,
+		ssa.OpAMD64ROLQ, ssa.OpAMD64ROLL, ssa.OpAMD64ROLW, ssa.OpAMD64ROLB,
+		ssa.OpAMD64RORQ, ssa.OpAMD64RORL, ssa.OpAMD64RORW, ssa.OpAMD64RORB,
 		ssa.OpAMD64ADDSS, ssa.OpAMD64ADDSD, ssa.OpAMD64SUBSS, ssa.OpAMD64SUBSD,
 		ssa.OpAMD64MULSS, ssa.OpAMD64MULSD, ssa.OpAMD64DIVSS, ssa.OpAMD64DIVSD,
 		ssa.OpAMD64PXOR:
@@ -767,6 +769,21 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.From.Reg = v.Args[0].Reg()
 		p.To.Type = obj.TYPE_REG
 		p.To.Reg = v.Reg()
+	case ssa.OpAMD64POPCNTQ, ssa.OpAMD64POPCNTL:
+		if v.Args[0].Reg() != v.Reg() {
+			// POPCNT on Intel has a false dependency on the destination register.
+			// Zero the destination to break the dependency.
+			p := s.Prog(x86.AMOVQ)
+			p.From.Type = obj.TYPE_CONST
+			p.From.Offset = 0
+			p.To.Type = obj.TYPE_REG
+			p.To.Reg = v.Reg()
+		}
+		p := s.Prog(v.Op.Asm())
+		p.From.Type = obj.TYPE_REG
+		p.From.Reg = v.Args[0].Reg()
+		p.To.Type = obj.TYPE_REG
+		p.To.Reg = v.Reg()
 	case ssa.OpAMD64SETEQ, ssa.OpAMD64SETNE,
 		ssa.OpAMD64SETL, ssa.OpAMD64SETLE,
 		ssa.OpAMD64SETG, ssa.OpAMD64SETGE,
@@ -878,6 +895,20 @@ func ssaGenValue(s *gc.SSAGenState, v *ssa.Value) {
 		p.To.Type = obj.TYPE_MEM
 		p.To.Reg = v.Args[0].Reg()
 		gc.AddAux(&p.To, v)
+	case ssa.OpClobber:
+		p := s.Prog(x86.AMOVL)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 0xdeaddead
+		p.To.Type = obj.TYPE_MEM
+		p.To.Reg = x86.REG_SP
+		gc.AddAux(&p.To, v)
+		p = s.Prog(x86.AMOVL)
+		p.From.Type = obj.TYPE_CONST
+		p.From.Offset = 0xdeaddead
+		p.To.Type = obj.TYPE_MEM
+		p.To.Reg = x86.REG_SP
+		gc.AddAux(&p.To, v)
+		p.To.Offset += 4
 	default:
 		v.Fatalf("genValue not implemented: %s", v.LongString())
 	}

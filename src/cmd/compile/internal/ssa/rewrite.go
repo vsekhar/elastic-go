@@ -6,27 +6,15 @@ package ssa
 
 import (
 	"cmd/internal/obj"
-	"crypto/sha1"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 func applyRewrite(f *Func, rb blockRewriter, rv valueRewriter) {
 	// repeat rewrites until we find no more rewrites
-	var curb *Block
-	var curv *Value
-	defer func() {
-		if curb != nil {
-			curb.Fatalf("panic during rewrite of block %s\n", curb.LongString())
-		}
-		if curv != nil {
-			curv.Fatalf("panic during rewrite of value %s\n", curv.LongString())
-			// TODO(khr): print source location also
-		}
-	}()
 	for {
 		change := false
 		for _, b := range f.Blocks {
@@ -35,11 +23,9 @@ func applyRewrite(f *Func, rb blockRewriter, rv valueRewriter) {
 					b.SetControl(b.Control.Args[0])
 				}
 			}
-			curb = b
 			if rb(b) {
 				change = true
 			}
-			curb = nil
 			for _, v := range b.Values {
 				change = phielimValue(v) || change
 
@@ -64,11 +50,9 @@ func applyRewrite(f *Func, rb blockRewriter, rv valueRewriter) {
 				}
 
 				// apply rewrite function
-				curv = v
 				if rv(v) {
 					change = true
 				}
-				curv = nil
 			}
 		}
 		if !change {
@@ -299,6 +283,20 @@ func isAuto(s interface{}) bool {
 	return ok
 }
 
+func fitsARM64Offset(off, align int64, sym interface{}) bool {
+	// only small offset (between -256 and 256) or offset that is a multiple of data size
+	// can be encoded in the instructions
+	// since this rewriting takes place before stack allocation, the offset to SP is unknown,
+	// so don't do it for args and locals with unaligned offset
+	if !is32Bit(off) {
+		return false
+	}
+	if align == 1 {
+		return true
+	}
+	return !isArg(sym) && (off%align == 0 || off < 256 && off > -256 && !isAuto(sym))
+}
+
 // isSameSym returns whether sym is the same as the given named symbol
 func isSameSym(sym interface{}, name string) bool {
 	s, ok := sym.(fmt.Stringer)
@@ -453,7 +451,7 @@ func isSamePtr(p1, p2 *Value) bool {
 // moveSize returns the number of bytes an aligned MOV instruction moves
 func moveSize(align int64, c *Config) int64 {
 	switch {
-	case align%8 == 0 && c.IntSize == 8:
+	case align%8 == 0 && c.PtrSize == 8:
 		return 8
 	case align%4 == 0:
 		return 4
@@ -564,27 +562,13 @@ func logRule(s string) {
 	}
 }
 
-var ruleFile *os.File
+var ruleFile io.Writer
 
 func min(x, y int64) int64 {
 	if x < y {
 		return x
 	}
 	return y
-}
-
-func experiment(f *Func) bool {
-	hstr := ""
-	for _, b := range sha1.Sum([]byte(f.Name)) {
-		hstr += fmt.Sprintf("%08b", b)
-	}
-	r := strings.HasSuffix(hstr, "00011")
-	_ = r
-	r = f.Name == "(*fmt).fmt_integer"
-	if r {
-		fmt.Printf("             enabled for %s\n", f.Name)
-	}
-	return r
 }
 
 func isConstZero(v *Value) bool {
@@ -594,5 +578,61 @@ func isConstZero(v *Value) bool {
 	case OpConst64, OpConst32, OpConst16, OpConst8, OpConstBool, OpConst32F, OpConst64F:
 		return v.AuxInt == 0
 	}
+	return false
+}
+
+// reciprocalExact64 reports whether 1/c is exactly representable.
+func reciprocalExact64(c float64) bool {
+	b := math.Float64bits(c)
+	man := b & (1<<52 - 1)
+	if man != 0 {
+		return false // not a power of 2, denormal, or NaN
+	}
+	exp := b >> 52 & (1<<11 - 1)
+	// exponent bias is 0x3ff.  So taking the reciprocal of a number
+	// changes the exponent to 0x7fe-exp.
+	switch exp {
+	case 0:
+		return false // ±0
+	case 0x7ff:
+		return false // ±inf
+	case 0x7fe:
+		return false // exponent is not representable
+	default:
+		return true
+	}
+}
+
+// reciprocalExact32 reports whether 1/c is exactly representable.
+func reciprocalExact32(c float32) bool {
+	b := math.Float32bits(c)
+	man := b & (1<<23 - 1)
+	if man != 0 {
+		return false // not a power of 2, denormal, or NaN
+	}
+	exp := b >> 23 & (1<<8 - 1)
+	// exponent bias is 0x7f.  So taking the reciprocal of a number
+	// changes the exponent to 0xfe-exp.
+	switch exp {
+	case 0:
+		return false // ±0
+	case 0xff:
+		return false // ±inf
+	case 0xfe:
+		return false // exponent is not representable
+	default:
+		return true
+	}
+}
+
+// check if an immediate can be directly encoded into an ARM's instruction
+func isARMImmRot(v uint32) bool {
+	for i := 0; i < 16; i++ {
+		if v&^0xff == 0 {
+			return true
+		}
+		v = v<<2 | v>>30
+	}
+
 	return false
 }

@@ -183,7 +183,7 @@ var pkgDeps = map[string][]string{
 
 	"testing":          {"L2", "flag", "fmt", "internal/race", "os", "runtime/debug", "runtime/pprof", "runtime/trace", "time"},
 	"testing/iotest":   {"L2", "log"},
-	"testing/quick":    {"L2", "flag", "fmt", "reflect"},
+	"testing/quick":    {"L2", "flag", "fmt", "reflect", "time"},
 	"internal/testenv": {"L2", "OS", "flag", "testing", "syscall"},
 
 	// L4 is defined as L3+fmt+log+time, because in general once
@@ -410,7 +410,7 @@ var pkgDeps = map[string][]string{
 	"expvar":             {"L4", "OS", "encoding/json", "net/http"},
 	"net/http/cgi":       {"L4", "NET", "OS", "crypto/tls", "net/http", "regexp"},
 	"net/http/cookiejar": {"L4", "NET", "net/http"},
-	"net/http/fcgi":      {"L4", "NET", "OS", "net/http", "net/http/cgi"},
+	"net/http/fcgi":      {"L4", "NET", "OS", "context", "net/http", "net/http/cgi"},
 	"net/http/httptest":  {"L4", "NET", "OS", "crypto/tls", "flag", "net/http", "net/http/internal", "crypto/x509"},
 	"net/http/httputil":  {"L4", "NET", "OS", "context", "net/http", "net/http/internal"},
 	"net/http/pprof":     {"L4", "OS", "html/template", "net/http", "runtime/pprof", "runtime/trace"},

@@ -28,8 +28,8 @@ var genericOps = []opData{
 	{name: "Add32", argLength: 2, commutative: true},
 	{name: "Add64", argLength: 2, commutative: true},
 	{name: "AddPtr", argLength: 2}, // For address calculations.  arg0 is a pointer and arg1 is an int.
-	{name: "Add32F", argLength: 2},
-	{name: "Add64F", argLength: 2},
+	{name: "Add32F", argLength: 2, commutative: true},
+	{name: "Add64F", argLength: 2, commutative: true},
 
 	{name: "Sub8", argLength: 2}, // arg0 - arg1
 	{name: "Sub16", argLength: 2},
@@ -43,24 +43,25 @@ var genericOps = []opData{
 	{name: "Mul16", argLength: 2, commutative: true},
 	{name: "Mul32", argLength: 2, commutative: true},
 	{name: "Mul64", argLength: 2, commutative: true},
-	{name: "Mul32F", argLength: 2},
-	{name: "Mul64F", argLength: 2},
+	{name: "Mul32F", argLength: 2, commutative: true},
+	{name: "Mul64F", argLength: 2, commutative: true},
 
 	{name: "Div32F", argLength: 2}, // arg0 / arg1
 	{name: "Div64F", argLength: 2},
 
-	{name: "Hmul32", argLength: 2},
-	{name: "Hmul32u", argLength: 2},
-	{name: "Hmul64", argLength: 2},
-	{name: "Hmul64u", argLength: 2},
+	{name: "Hmul32", argLength: 2, commutative: true},
+	{name: "Hmul32u", argLength: 2, commutative: true},
+	{name: "Hmul64", argLength: 2, commutative: true},
+	{name: "Hmul64u", argLength: 2, commutative: true},
 
-	{name: "Mul32uhilo", argLength: 2, typ: "(UInt32,UInt32)"}, // arg0 * arg1, returns (hi, lo)
-	{name: "Mul64uhilo", argLength: 2, typ: "(UInt64,UInt64)"}, // arg0 * arg1, returns (hi, lo)
+	{name: "Mul32uhilo", argLength: 2, typ: "(UInt32,UInt32)", commutative: true}, // arg0 * arg1, returns (hi, lo)
+	{name: "Mul64uhilo", argLength: 2, typ: "(UInt64,UInt64)", commutative: true}, // arg0 * arg1, returns (hi, lo)
 
 	// Weird special instructions for use in the strength reduction of divides.
 	// These ops compute unsigned (arg0 + arg1) / 2, correct to all
 	// 32/64 bits, even when the intermediate result of the add has 33/65 bits.
 	// These ops can assume arg0 >= arg1.
+	// Note: these ops aren't commutative!
 	{name: "Avg32u", argLength: 2, typ: "UInt32"}, // 32-bit platforms only
 	{name: "Avg64u", argLength: 2, typ: "UInt64"}, // 64-bit platforms only
 
@@ -159,8 +160,8 @@ var genericOps = []opData{
 	{name: "EqPtr", argLength: 2, commutative: true, typ: "Bool"},
 	{name: "EqInter", argLength: 2, typ: "Bool"}, // arg0 or arg1 is nil; other cases handled by frontend
 	{name: "EqSlice", argLength: 2, typ: "Bool"}, // arg0 or arg1 is nil; other cases handled by frontend
-	{name: "Eq32F", argLength: 2, typ: "Bool"},
-	{name: "Eq64F", argLength: 2, typ: "Bool"},
+	{name: "Eq32F", argLength: 2, commutative: true, typ: "Bool"},
+	{name: "Eq64F", argLength: 2, commutative: true, typ: "Bool"},
 
 	{name: "Neq8", argLength: 2, commutative: true, typ: "Bool"}, // arg0 != arg1
 	{name: "Neq16", argLength: 2, commutative: true, typ: "Bool"},
@@ -169,8 +170,8 @@ var genericOps = []opData{
 	{name: "NeqPtr", argLength: 2, commutative: true, typ: "Bool"},
 	{name: "NeqInter", argLength: 2, typ: "Bool"}, // arg0 or arg1 is nil; other cases handled by frontend
 	{name: "NeqSlice", argLength: 2, typ: "Bool"}, // arg0 or arg1 is nil; other cases handled by frontend
-	{name: "Neq32F", argLength: 2, typ: "Bool"},
-	{name: "Neq64F", argLength: 2},
+	{name: "Neq32F", argLength: 2, commutative: true, typ: "Bool"},
+	{name: "Neq64F", argLength: 2, commutative: true, typ: "Bool"},
 
 	{name: "Less8", argLength: 2, typ: "Bool"},  // arg0 < arg1, signed
 	{name: "Less8U", argLength: 2, typ: "Bool"}, // arg0 < arg1, unsigned
@@ -249,6 +250,11 @@ var genericOps = []opData{
 	{name: "BitRev32", argLength: 1}, // Reverse the bits in arg[0]
 	{name: "BitRev64", argLength: 1}, // Reverse the bits in arg[0]
 
+	{name: "PopCount8", argLength: 1},  // Count bits in arg[0]
+	{name: "PopCount16", argLength: 1}, // Count bits in arg[0]
+	{name: "PopCount32", argLength: 1}, // Count bits in arg[0]
+	{name: "PopCount64", argLength: 1}, // Count bits in arg[0]
+
 	{name: "Sqrt", argLength: 1}, // sqrt(arg0), float64 only
 
 	// Data movement, max argument length for Phi is indefinite so just pick
@@ -308,7 +314,7 @@ var genericOps = []opData{
 	// Return values appear on the stack. The method receiver, if any, is treated
 	// as a phantom first argument.
 	{name: "ClosureCall", argLength: 3, aux: "Int64", call: true},                    // arg0=code pointer, arg1=context ptr, arg2=memory.  auxint=arg size.  Returns memory.
-	{name: "StaticCall", argLength: 1, aux: "SymOff", call: true, symEffect: "None"}, // call function aux.(*gc.Sym), arg0=memory.  auxint=arg size.  Returns memory.
+	{name: "StaticCall", argLength: 1, aux: "SymOff", call: true, symEffect: "None"}, // call function aux.(*obj.LSym), arg0=memory.  auxint=arg size.  Returns memory.
 	{name: "InterCall", argLength: 2, aux: "Int64", call: true},                      // interface call.  arg0=code pointer, arg1=memory, auxint=arg size.  Returns memory.
 
 	// Conversions: signed extensions, zero (unsigned) extensions, truncations
@@ -458,6 +464,9 @@ var genericOps = []opData{
 	{name: "AtomicCompareAndSwap64", argLength: 4, typ: "(Bool,Mem)", hasSideEffects: true}, // if *arg0==arg1, then set *arg0=arg2.  Returns true iff store happens and new memory.
 	{name: "AtomicAnd8", argLength: 3, typ: "Mem", hasSideEffects: true},                    // *arg0 &= arg1.  arg2=memory.  Returns memory.
 	{name: "AtomicOr8", argLength: 3, typ: "Mem", hasSideEffects: true},                     // *arg0 |= arg1.  arg2=memory.  Returns memory.
+
+	// Clobber experiment op
+	{name: "Clobber", argLength: 0, typ: "Void", aux: "SymOff", symEffect: "None"}, // write an invalid pointer value to the given pointer slot of a stack variable
 }
 
 //     kind           control    successors       implicit exit

@@ -5,6 +5,7 @@
 package gc
 
 import (
+	"cmd/compile/internal/types"
 	"cmd/internal/src"
 	"fmt"
 )
@@ -59,7 +60,7 @@ func order(fn *Node) {
 // Ordertemp allocates a new temporary with the given type,
 // pushes it onto the temp stack, and returns it.
 // If clear is true, ordertemp emits code to zero the temporary.
-func ordertemp(t *Type, order *Order, clear bool) *Node {
+func ordertemp(t *types.Type, order *Order, clear bool) *Node {
 	var_ := temp(t)
 	if clear {
 		a := nod(OAS, var_, nil)
@@ -83,7 +84,7 @@ func ordertemp(t *Type, order *Order, clear bool) *Node {
 // (The other candidate would be map access, but map access
 // returns a pointer to the result data instead of taking a pointer
 // to be filled in.)
-func ordercopyexpr(n *Node, t *Type, order *Order, clear int) *Node {
+func ordercopyexpr(n *Node, t *types.Type, order *Order, clear int) *Node {
 	var_ := ordertemp(t, order, clear != 0)
 	a := nod(OAS, var_, n)
 	a = typecheck(a, Etop)
@@ -177,7 +178,7 @@ func ordersafeexpr(n *Node, order *Order) *Node {
 // because we emit explicit VARKILL instructions marking the end of those
 // temporaries' lifetimes.
 func isaddrokay(n *Node) bool {
-	return islvalue(n) && (n.Op != ONAME || n.Class == PEXTERN || n.IsAutoTmp())
+	return islvalue(n) && (n.Op != ONAME || n.Class() == PEXTERN || n.IsAutoTmp())
 }
 
 // Orderaddrtemp ensures that n is okay to pass by address to runtime routines.
@@ -208,7 +209,7 @@ func orderaddrtemp(n *Node, order *Order) *Node {
 
 // ordermapkeytemp prepares n to be a key in a map runtime call and returns n.
 // It should only be used for map runtime calls which have *_fast* versions.
-func ordermapkeytemp(t *Type, n *Node, order *Order) *Node {
+func ordermapkeytemp(t *types.Type, n *Node, order *Order) *Node {
 	// Most map calls need to take the address of the key.
 	// Exception: map*_fast* calls. See golang.org/issue/19015.
 	if mapfast(t) == mapslow {
@@ -314,6 +315,14 @@ func orderstmtinplace(n *Node) *Node {
 
 // Orderinit moves n's init list to order->out.
 func orderinit(n *Node, order *Order) {
+	if n.mayBeShared() {
+		// For concurrency safety, don't mutate potentially shared nodes.
+		// First, ensure that no work is required here.
+		if n.Ninit.Len() > 0 {
+			Fatalf("orderinit shared node with ninit")
+		}
+		return
+	}
 	orderstmtlist(n.Ninit, order)
 	n.Ninit.Set(nil)
 }
@@ -382,33 +391,36 @@ func ordercall(n *Node, order *Order) {
 	ordercallargs(&n.List, order)
 
 	if n.Op == OCALLFUNC {
-		t, it := iterFields(n.Left.Type.Params())
-		for i := range n.List.Slice() {
-			// Check for "unsafe-uintptr" tag provided by escape analysis.
-			// If present and the argument is really a pointer being converted
-			// to uintptr, arrange for the pointer to be kept alive until the call
-			// returns, by copying it into a temp and marking that temp
+		keepAlive := func(i int) {
+			// If the argument is really a pointer being converted to uintptr,
+			// arrange for the pointer to be kept alive until the call returns,
+			// by copying it into a temp and marking that temp
 			// still alive when we pop the temp stack.
-			if t == nil {
-				break
+			xp := n.List.Addr(i)
+			for (*xp).Op == OCONVNOP && !(*xp).Type.IsPtr() {
+				xp = &(*xp).Left
 			}
-			if t.Note == unsafeUintptrTag || t.Note == uintptrEscapesTag {
-				xp := n.List.Addr(i)
-				for (*xp).Op == OCONVNOP && !(*xp).Type.IsPtr() {
-					xp = &(*xp).Left
+			x := *xp
+			if x.Type.IsPtr() {
+				x = ordercopyexpr(x, x.Type, order, 0)
+				x.Name.SetKeepalive(true)
+				*xp = x
+			}
+		}
+
+		for i, t := range n.Left.Type.Params().FieldSlice() {
+			// Check for "unsafe-uintptr" tag provided by escape analysis.
+			if t.Isddd() && !n.Isddd() {
+				if t.Note == uintptrEscapesTag {
+					for ; i < n.List.Len(); i++ {
+						keepAlive(i)
+					}
 				}
-				x := *xp
-				if x.Type.IsPtr() {
-					x = ordercopyexpr(x, x.Type, order, 0)
-					x.Name.SetKeepalive(true)
-					*xp = x
+			} else {
+				if t.Note == unsafeUintptrTag || t.Note == uintptrEscapesTag {
+					keepAlive(i)
 				}
 			}
-			next := it.Next()
-			if next == nil && t.Isddd() && t.Note == uintptrEscapesTag {
-				next = t
-			}
-			t = next
 		}
 	}
 }
@@ -584,8 +596,8 @@ func orderstmt(n *Node, order *Order) {
 		orderexprlist(n.List, order)
 		n.Rlist.First().Left = orderexpr(n.Rlist.First().Left, order, nil) // arg to recv
 		ch := n.Rlist.First().Left.Type
-		tmp1 := ordertemp(ch.Elem(), order, haspointers(ch.Elem()))
-		tmp2 := ordertemp(Types[TBOOL], order, false)
+		tmp1 := ordertemp(ch.Elem(), order, types.Haspointers(ch.Elem()))
+		tmp2 := ordertemp(types.Types[TBOOL], order, false)
 		order.out = append(order.out, n)
 		r := nod(OAS, n.List.First(), tmp1)
 		r = typecheck(r, Etop)
@@ -734,9 +746,9 @@ func orderstmt(n *Node, order *Order) {
 			// make copy.
 			r := n.Right
 
-			if r.Type.IsString() && r.Type != Types[TSTRING] {
+			if r.Type.IsString() && r.Type != types.Types[TSTRING] {
 				r = nod(OCONV, r, nil)
-				r.Type = Types[TSTRING]
+				r.Type = types.Types[TSTRING]
 				r = typecheck(r, Erv)
 			}
 
@@ -750,7 +762,7 @@ func orderstmt(n *Node, order *Order) {
 			n.Right = ordercopyexpr(r, r.Type, order, 0)
 
 			// n->alloc is the temp for the iterator.
-			prealloc[n] = ordertemp(Types[TUINT8], order, true)
+			prealloc[n] = ordertemp(types.Types[TUINT8], order, true)
 		}
 		for i := range n.List.Slice() {
 			n.List.SetIndex(i, orderexprinplace(n.List.Index(i), order))
@@ -851,7 +863,7 @@ func orderstmt(n *Node, order *Order) {
 							n2.Ninit.Append(tmp2)
 						}
 
-						r.Left = ordertemp(r.Right.Left.Type.Elem(), order, haspointers(r.Right.Left.Type.Elem()))
+						r.Left = ordertemp(r.Right.Left.Type.Elem(), order, types.Haspointers(r.Right.Left.Type.Elem()))
 						tmp2 = nod(OAS, tmp1, r.Left)
 						tmp2 = typecheck(tmp2, Etop)
 						n2.Ninit.Append(tmp2)
@@ -868,7 +880,7 @@ func orderstmt(n *Node, order *Order) {
 							n2.Ninit.Append(tmp2)
 						}
 
-						r.List.Set1(ordertemp(Types[TBOOL], order, false))
+						r.List.Set1(ordertemp(types.Types[TBOOL], order, false))
 						tmp2 = okas(tmp1, r.List.First())
 						tmp2 = typecheck(tmp2, Etop)
 						n2.Ninit.Append(tmp2)
@@ -1001,7 +1013,7 @@ func orderexpr(n *Node, order *Order, lhs *Node) *Node {
 		orderexprlist(n.List, order)
 
 		if n.List.Len() > 5 {
-			t := typArray(Types[TSTRING], int64(n.List.Len()))
+			t := types.NewArray(types.Types[TSTRING], int64(n.List.Len()))
 			prealloc[n] = ordertemp(t, order, false)
 		}
 
@@ -1107,7 +1119,7 @@ func orderexpr(n *Node, order *Order, lhs *Node) *Node {
 		var s []*Node
 
 		cleantempnopop(mark, order, &s)
-		n.Right.Ninit.Prepend(s...)
+		n.Right = addinit(n.Right, s)
 		n.Right = orderexprinplace(n.Right, order)
 
 	case OCALLFUNC,
@@ -1154,7 +1166,7 @@ func orderexpr(n *Node, order *Order, lhs *Node) *Node {
 
 	case OCLOSURE:
 		if n.Noescape() && n.Func.Cvars.Len() > 0 {
-			prealloc[n] = ordertemp(Types[TUINT8], order, false) // walk will fill in correct type
+			prealloc[n] = ordertemp(types.Types[TUINT8], order, false) // walk will fill in correct type
 		}
 
 	case OARRAYLIT, OSLICELIT, OCALLPART:
@@ -1163,7 +1175,7 @@ func orderexpr(n *Node, order *Order, lhs *Node) *Node {
 		orderexprlist(n.List, order)
 		orderexprlist(n.Rlist, order)
 		if n.Noescape() {
-			prealloc[n] = ordertemp(Types[TUINT8], order, false) // walk will fill in correct type
+			prealloc[n] = ordertemp(types.Types[TUINT8], order, false) // walk will fill in correct type
 		}
 
 	case ODDDARG:
@@ -1226,7 +1238,7 @@ func orderas2(n *Node, order *Order) {
 	left := []*Node{}
 	for _, l := range n.List.Slice() {
 		if !isblank(l) {
-			tmp := ordertemp(l.Type, order, haspointers(l.Type))
+			tmp := ordertemp(l.Type, order, types.Haspointers(l.Type))
 			tmplist = append(tmplist, tmp)
 			left = append(left, l)
 		}
@@ -1255,11 +1267,11 @@ func orderokas2(n *Node, order *Order) {
 	var tmp1, tmp2 *Node
 	if !isblank(n.List.First()) {
 		typ := n.Rlist.First().Type
-		tmp1 = ordertemp(typ, order, haspointers(typ))
+		tmp1 = ordertemp(typ, order, types.Haspointers(typ))
 	}
 
 	if !isblank(n.List.Second()) {
-		tmp2 = ordertemp(Types[TBOOL], order, false)
+		tmp2 = ordertemp(types.Types[TBOOL], order, false)
 	}
 
 	order.out = append(order.out, n)

@@ -313,6 +313,9 @@ func BuildModeInit() {
 		pkgsFilter = pkgsMain
 		ldBuildmode = "exe"
 	case "pie":
+		if cfg.BuildRace {
+			base.Fatalf("-buildmode=pie not supported when -race is enabled")
+		}
 		if gccgo {
 			base.Fatalf("-buildmode=pie not supported by gccgo")
 		} else {
@@ -1124,6 +1127,12 @@ func (b *Builder) Do(root *Action) {
 	if _, ok := cfg.OSArchSupportsCgo[cfg.Goos+"/"+cfg.Goarch]; !ok && cfg.BuildContext.Compiler == "gc" {
 		fmt.Fprintf(os.Stderr, "cmd/go: unsupported GOOS/GOARCH pair %s/%s\n", cfg.Goos, cfg.Goarch)
 		os.Exit(2)
+	}
+	for _, tag := range cfg.BuildContext.BuildTags {
+		if strings.Contains(tag, ",") {
+			fmt.Fprintf(os.Stderr, "cmd/go: -tags space-separated list contains comma\n")
+			os.Exit(2)
+		}
 	}
 
 	// Build list of all actions, assigning depth-first post-order priority.
@@ -2233,6 +2242,10 @@ func (gcToolchain) gc(b *Builder, p *load.Package, archive, obj string, asmhdr b
 	if p.Internal.BuildID != "" {
 		gcargs = append(gcargs, "-buildid", p.Internal.BuildID)
 	}
+	platform := cfg.Goos + "/" + cfg.Goarch
+	if p.Internal.OmitDebug || platform == "nacl/amd64p32" || platform == "darwin/arm" || platform == "darwin/arm64" || cfg.Goos == "plan9" {
+		gcargs = append(gcargs, "-dwarf=false")
+	}
 
 	// The compiler needs to determine and rewrite accesses to remote variables.
 	if cfg.BuildBuildmode == "remote" {
@@ -2452,8 +2465,8 @@ func (gcToolchain) ld(b *Builder, root *Action, out string, allactions []*Action
 	if cfg.BuildContext.InstallSuffix != "" {
 		ldflags = append(ldflags, "-installsuffix", cfg.BuildContext.InstallSuffix)
 	}
-	if root.Package.Internal.OmitDWARF {
-		ldflags = append(ldflags, "-w")
+	if root.Package.Internal.OmitDebug {
+		ldflags = append(ldflags, "-s", "-w")
 	}
 	if cfg.BuildBuildmode == "plugin" {
 		pluginpath := root.Package.ImportPath
@@ -2534,21 +2547,32 @@ func (gcToolchain) cc(b *Builder, p *load.Package, objdir, ofile, cfile string) 
 type gccgoToolchain struct{}
 
 var GccgoName, GccgoBin string
+var gccgoErr error
 
 func init() {
 	GccgoName = os.Getenv("GCCGO")
 	if GccgoName == "" {
 		GccgoName = "gccgo"
 	}
-	GccgoBin, _ = exec.LookPath(GccgoName)
+	GccgoBin, gccgoErr = exec.LookPath(GccgoName)
 }
 
 func (gccgoToolchain) compiler() string {
+	checkGccgoBin()
 	return GccgoBin
 }
 
 func (gccgoToolchain) linker() string {
+	checkGccgoBin()
 	return GccgoBin
+}
+
+func checkGccgoBin() {
+	if gccgoErr == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "cmd/go: gccgo: %s\n", gccgoErr)
+	os.Exit(2)
 }
 
 func (tools gccgoToolchain) gc(b *Builder, p *load.Package, archive, obj string, asmhdr bool, importArgs []string, gofiles []string) (ofile string, output []byte, err error) {
@@ -2562,6 +2586,57 @@ func (tools gccgoToolchain) gc(b *Builder, p *load.Package, archive, obj string,
 	if p.Internal.LocalPrefix != "" {
 		gcargs = append(gcargs, "-fgo-relative-import-path="+p.Internal.LocalPrefix)
 	}
+
+	// Handle vendor directories
+	savedirs := []string{}
+	for _, incdir := range importArgs {
+		if incdir != "-I" {
+			savedirs = append(savedirs, incdir)
+		}
+	}
+
+	for _, path := range p.Imports {
+		// If this is a new vendor path, add it to the list of importArgs
+		if i := strings.LastIndex(path, "/vendor"); i >= 0 {
+			for _, dir := range savedirs {
+				// Check if the vendor path is already included in dir
+				if strings.HasSuffix(dir, path[:i+len("/vendor")]) {
+					continue
+				}
+				// Make sure this vendor path is not already in the list for importArgs
+				vendorPath := dir + "/" + path[:i+len("/vendor")]
+				for _, imp := range importArgs {
+					if imp == "-I" {
+						continue
+					}
+					// This vendorPath is already in the list
+					if imp == vendorPath {
+						goto nextSuffixPath
+					}
+				}
+				// New vendorPath not yet in the importArgs list, so add it
+				importArgs = append(importArgs, "-I", vendorPath)
+			nextSuffixPath:
+			}
+		} else if strings.HasPrefix(path, "vendor/") {
+			for _, dir := range savedirs {
+				// Make sure this vendor path is not already in the list for importArgs
+				vendorPath := dir + "/" + path[len("/vendor"):]
+				for _, imp := range importArgs {
+					if imp == "-I" {
+						continue
+					}
+					if imp == vendorPath {
+						goto nextPrefixPath
+					}
+				}
+				// This vendor path is needed and not already in the list, so add it
+				importArgs = append(importArgs, "-I", vendorPath)
+			nextPrefixPath:
+			}
+		}
+	}
+
 	args := str.StringList(tools.compiler(), importArgs, "-c", gcargs, "-o", ofile, buildGccgoflags)
 	for _, f := range gofiles {
 		args = append(args, mkAbs(p.Dir, f))
@@ -2946,7 +3021,10 @@ func (b *Builder) gfortran(p *load.Package, out string, flags []string, ffile st
 func (b *Builder) ccompile(p *load.Package, outfile string, flags []string, file string, compiler []string) error {
 	file = mkAbs(p.Dir, file)
 	desc := p.ImportPath
-	output, err := b.runOut(p.Dir, desc, nil, compiler, flags, "-o", outfile, "-c", file)
+	if !filepath.IsAbs(outfile) {
+		outfile = filepath.Join(p.Dir, outfile)
+	}
+	output, err := b.runOut(filepath.Dir(file), desc, nil, compiler, flags, "-o", outfile, "-c", filepath.Base(file))
 	if len(output) > 0 {
 		// On FreeBSD 11, when we pass -g to clang 3.8 it
 		// invokes its internal assembler with -dwarf-version=2.
