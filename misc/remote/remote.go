@@ -4,6 +4,8 @@ package main
 
 import (
 	"fmt"
+
+	"../remote/lib"
 )
 
 var var1 int
@@ -22,28 +24,30 @@ func main() {
 
 	// Some gymnastics to exercise the static analysis
 	type functionHolder struct {
-		fs []func(int, chan struct{})
+		fs []func(*int, chan struct{})
 	}
 	fh := new(functionHolder)
 	fh.fs = append(fh.fs,
-		func(int, chan struct{}) {},
+		func(*int, chan struct{}) {},
 		h,
-		func(int, chan struct{}) {},
+		func(*int, chan struct{}) {},
 	)
-	getFunc := func(i int) func(int, chan struct{}) {
+	getFunc := func(i int) func(*int, chan struct{}) {
 		return fh.fs[i]
 	}
-	go getFunc(var1)(0, done)
+	i := 0
+	go getFunc(var1)(&i, done)
 	<-done
 
 	fmt.Printf("var1: %d\n", var1)
 	fmt.Printf("var2: %d\n", var2)
 	fmt.Printf("var3: %d\n", var3)
+	fmt.Printf("lib RemoteVar: %d\n", lib.RemoteVar)
 }
 
-func h(i int, done chan struct{}) {
+func h(i *int, done chan struct{}) {
 	var2 += 1
-	if i == 0 {
+	if *i == 0 {
 		j()
 		done <- struct{}{}
 	}
@@ -56,7 +60,8 @@ func j() {
 }
 
 func k() {
-	h(1, nil) // stop loop
+	i := 1 // stop loop
+	h(&i, nil)
 }
 
 func g(i int) {

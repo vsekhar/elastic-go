@@ -3,12 +3,13 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-set -e
+set -xe
 
 function cleanup() {
     rm -f a.out
 }
 trap cleanup EXIT
 
-go build -buildmode=remote -o a.out -gcflags="-d remote" remote.go remote2.go
+# go build -buildmode=remote -o a.out -gcflags="-d remote"
+go build -o a.out
 go remote ./a.out
