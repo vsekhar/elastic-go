@@ -154,7 +154,7 @@ func (b *builder) logicalBinop(fn *Function, e *ast.BinaryExpr) Value {
 
 	// All edges from e.X to done carry the short-circuit value.
 	var edges []Value
-	for _ = range done.Preds {
+	for range done.Preds {
 		edges = append(edges, short)
 	}
 
@@ -2263,10 +2263,6 @@ func (p *Package) build() {
 	if p.info == nil {
 		return // synthetic package, e.g. "testmain"
 	}
-	if p.files == nil {
-		p.info = nil
-		return // package loaded from export data
-	}
 
 	// Ensure we have runtime type info for all exported members.
 	// TODO(adonovan): ideally belongs in memberFromObject, but
@@ -2295,10 +2291,6 @@ func (p *Package) build() {
 
 		// Call the init() function of each package we import.
 		for _, pkg := range p.Pkg.Imports() {
-			if pkg.Path() == "unsafe" {
-				// no code
-				continue
-			}
 			prereq := p.Prog.packages[pkg]
 			if prereq == nil {
 				panic(fmt.Sprintf("Package(%q).Build(): unsatisfied import: Program.CreatePackage(%q) was not called", p.Pkg.Path(), pkg.Path()))

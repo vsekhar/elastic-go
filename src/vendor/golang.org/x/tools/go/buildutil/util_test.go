@@ -16,9 +16,6 @@ import (
 )
 
 func TestContainingPackage(t *testing.T) {
-	// VS: does not work well when tested inside the compiler's tree
-	t.Skip()
-
 	// unvirtualized:
 	goroot := runtime.GOROOT()
 	gopath := filepath.SplitList(os.Getenv("GOPATH"))[0]
