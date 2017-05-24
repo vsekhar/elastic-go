@@ -990,6 +990,29 @@ func hostobjCopy() (paths []string) {
 	return paths
 }
 
+// writeGDBLinkerScript creates gcc linker script file in temp
+// directory. writeGDBLinkerScript returns created file path.
+// The script is used to work around gcc bug
+// (see https://golang.org/issue/20183 for details).
+func writeGDBLinkerScript() string {
+	name := "fix_debug_gdb_scripts.ld"
+	path := filepath.Join(*flagTmpdir, name)
+	src := `SECTIONS
+{
+  .debug_gdb_scripts BLOCK(__section_alignment__) (NOLOAD) :
+  {
+    *(.debug_gdb_scripts)
+  }
+}
+INSERT AFTER .debug_types;
+`
+	err := ioutil.WriteFile(path, []byte(src), 0666)
+	if err != nil {
+		Errorf(nil, "WriteFile %s failed: %v", name, err)
+	}
+	return path
+}
+
 // archive builds a .a archive from the hostobj object files.
 func (ctxt *Link) archive() {
 	if Buildmode != BuildmodeCArchive {
@@ -1054,7 +1077,7 @@ func (l *Link) hostlink() {
 		argv = append(argv, "-Wl,-headerpad,1144")
 		if l.DynlinkingGo() {
 			argv = append(argv, "-Wl,-flat_namespace")
-		} else {
+		} else if !SysArch.InFamily(sys.ARM64) {
 			argv = append(argv, "-Wl,-no_pie")
 		}
 	case objabi.Hopenbsd:
@@ -1079,7 +1102,10 @@ func (l *Link) hostlink() {
 		argv = append(argv, "-pie")
 	case BuildmodeCShared:
 		if Headtype == objabi.Hdarwin {
-			argv = append(argv, "-dynamiclib", "-Wl,-read_only_relocs,suppress")
+			argv = append(argv, "-dynamiclib")
+			if SysArch.Family != sys.AMD64 {
+				argv = append(argv, "-Wl,-read_only_relocs,suppress")
+			}
 		} else {
 			// ELF.
 			argv = append(argv, "-Wl,-Bsymbolic")
@@ -1248,6 +1274,10 @@ func (l *Link) hostlink() {
 		}
 	}
 	if Headtype == objabi.Hwindows {
+		// use gcc linker script to work around gcc bug
+		// (see https://golang.org/issue/20183 for details).
+		p := writeGDBLinkerScript()
+		argv = append(argv, "-Wl,-T,"+p)
 		// libmingw32 and libmingwex have some inter-dependencies,
 		// so must use linker groups.
 		argv = append(argv, "-Wl,--start-group", "-lmingwex", "-lmingw32", "-Wl,--end-group")
@@ -1264,7 +1294,9 @@ func (l *Link) hostlink() {
 
 	if out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput(); err != nil {
 		Exitf("running %s failed: %v\n%s", argv[0], err, out)
-	} else if l.Debugvlog != 0 && len(out) > 0 {
+	} else if len(out) > 0 {
+		// always print external output even if the command is successful, so that we don't
+		// swallow linker warnings (see https://golang.org/issue/17935).
 		l.Logf("%s", out)
 	}
 
@@ -1907,7 +1939,7 @@ func genasmsym(ctxt *Link, put func(*Link, *Symbol, string, SymbolType, int64, *
 	}
 
 	for _, s := range ctxt.Syms.Allsym {
-		if s.Attr.Hidden() {
+		if s.Attr.NotInSymbolTable() {
 			continue
 		}
 		if (s.Name == "" || s.Name[0] == '.') && s.Version == 0 && s.Name != ".rathole" && s.Name != ".TOC." {
@@ -1947,7 +1979,7 @@ func genasmsym(ctxt *Link, put func(*Link, *Symbol, string, SymbolType, int64, *
 				continue
 			}
 			if len(s.P) > 0 {
-				Errorf(s, "should not be bss (size=%d type=%d special=%v)", len(s.P), s.Type, s.Attr.Special())
+				Errorf(s, "should not be bss (size=%d type=%v special=%v)", len(s.P), s.Type, s.Attr.Special())
 			}
 			put(ctxt, s, s.Name, BSSSym, Symaddr(s), s.Gotype)
 

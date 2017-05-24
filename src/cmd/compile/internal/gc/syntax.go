@@ -351,12 +351,21 @@ type Param struct {
 
 // Func holds Node fields used only with function-like nodes.
 type Func struct {
-	Shortname  *types.Sym
-	Enter      Nodes // for example, allocate and initialize memory for escaping parameters
-	Exit       Nodes
-	Cvars      Nodes   // closure params
-	Dcl        []*Node // autodcl for this func/closure
-	Inldcl     Nodes   // copy of dcl for use in inlining
+	Shortname *types.Sym
+	Enter     Nodes // for example, allocate and initialize memory for escaping parameters
+	Exit      Nodes
+	Cvars     Nodes   // closure params
+	Dcl       []*Node // autodcl for this func/closure
+	Inldcl    Nodes   // copy of dcl for use in inlining
+
+	// Parents records the parent scope of each scope within a
+	// function. The root scope (0) has no parent, so the i'th
+	// scope's parent is stored at Parents[i-1].
+	Parents []ScopeID
+
+	// Marks records scope boundary changes.
+	Marks []Mark
+
 	Closgen    int
 	Outerfunc  *Node // outer function (for closure)
 	FieldTrack map[*types.Sym]struct{}
@@ -380,31 +389,47 @@ type Func struct {
 	flags bitset8
 }
 
+// A Mark represents a scope boundary.
+type Mark struct {
+	// Pos is the position of the token that marks the scope
+	// change.
+	Pos src.XPos
+
+	// Scope identifies the innermost scope to the right of Pos.
+	Scope ScopeID
+}
+
+// A ScopeID represents a lexical scope within a function.
+type ScopeID int32
+
 const (
 	funcDupok         = 1 << iota // duplicate definitions ok
 	funcWrapper                   // is method wrapper
 	funcNeedctxt                  // function uses context register (has closure variables)
 	funcReflectMethod             // function calls reflect.Type.Method or MethodByName
 	funcIsHiddenClosure
-	funcNoFramePointer // Must not use a frame pointer for this function
-	funcHasDefer       // contains a defer statement
+	funcNoFramePointer   // Must not use a frame pointer for this function
+	funcHasDefer         // contains a defer statement
+	funcNilCheckDisabled // disable nil checks when compiling this function
 )
 
-func (f *Func) Dupok() bool           { return f.flags&funcDupok != 0 }
-func (f *Func) Wrapper() bool         { return f.flags&funcWrapper != 0 }
-func (f *Func) Needctxt() bool        { return f.flags&funcNeedctxt != 0 }
-func (f *Func) ReflectMethod() bool   { return f.flags&funcReflectMethod != 0 }
-func (f *Func) IsHiddenClosure() bool { return f.flags&funcIsHiddenClosure != 0 }
-func (f *Func) NoFramePointer() bool  { return f.flags&funcNoFramePointer != 0 }
-func (f *Func) HasDefer() bool        { return f.flags&funcHasDefer != 0 }
+func (f *Func) Dupok() bool            { return f.flags&funcDupok != 0 }
+func (f *Func) Wrapper() bool          { return f.flags&funcWrapper != 0 }
+func (f *Func) Needctxt() bool         { return f.flags&funcNeedctxt != 0 }
+func (f *Func) ReflectMethod() bool    { return f.flags&funcReflectMethod != 0 }
+func (f *Func) IsHiddenClosure() bool  { return f.flags&funcIsHiddenClosure != 0 }
+func (f *Func) NoFramePointer() bool   { return f.flags&funcNoFramePointer != 0 }
+func (f *Func) HasDefer() bool         { return f.flags&funcHasDefer != 0 }
+func (f *Func) NilCheckDisabled() bool { return f.flags&funcNilCheckDisabled != 0 }
 
-func (f *Func) SetDupok(b bool)           { f.flags.set(funcDupok, b) }
-func (f *Func) SetWrapper(b bool)         { f.flags.set(funcWrapper, b) }
-func (f *Func) SetNeedctxt(b bool)        { f.flags.set(funcNeedctxt, b) }
-func (f *Func) SetReflectMethod(b bool)   { f.flags.set(funcReflectMethod, b) }
-func (f *Func) SetIsHiddenClosure(b bool) { f.flags.set(funcIsHiddenClosure, b) }
-func (f *Func) SetNoFramePointer(b bool)  { f.flags.set(funcNoFramePointer, b) }
-func (f *Func) SetHasDefer(b bool)        { f.flags.set(funcHasDefer, b) }
+func (f *Func) SetDupok(b bool)            { f.flags.set(funcDupok, b) }
+func (f *Func) SetWrapper(b bool)          { f.flags.set(funcWrapper, b) }
+func (f *Func) SetNeedctxt(b bool)         { f.flags.set(funcNeedctxt, b) }
+func (f *Func) SetReflectMethod(b bool)    { f.flags.set(funcReflectMethod, b) }
+func (f *Func) SetIsHiddenClosure(b bool)  { f.flags.set(funcIsHiddenClosure, b) }
+func (f *Func) SetNoFramePointer(b bool)   { f.flags.set(funcNoFramePointer, b) }
+func (f *Func) SetHasDefer(b bool)         { f.flags.set(funcHasDefer, b) }
+func (f *Func) SetNilCheckDisabled(b bool) { f.flags.set(funcNilCheckDisabled, b) }
 
 type Op uint8
 

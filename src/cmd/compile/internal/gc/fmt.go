@@ -1509,16 +1509,10 @@ func (n *Node) exprfmt(s fmt.State, prec int, mode fmtMode) {
 		}
 		mode.Fprintf(s, "make(%v)", n.Type)
 
+	case OPLUS, OMINUS, OADDR, OCOM, OIND, ONOT, ORECV:
 		// Unary
-	case OPLUS,
-		OMINUS,
-		OADDR,
-		OCOM,
-		OIND,
-		ONOT,
-		ORECV:
 		mode.Fprintf(s, "%#v", n.Op)
-		if n.Left.Op == n.Op {
+		if n.Left != nil && n.Left.Op == n.Op {
 			fmt.Fprint(s, " ")
 		}
 		n.Left.exprfmt(s, nprec+1, mode)
@@ -1760,7 +1754,11 @@ func fldconv(f *types.Field, flag FmtFlag, mode fmtMode, depth int) string {
 
 	var typ string
 	if f.Isddd() {
-		typ = "..." + tmodeString(f.Type.Elem(), mode, depth)
+		var et *types.Type
+		if f.Type != nil {
+			et = f.Type.Elem()
+		}
+		typ = "..." + tmodeString(et, mode, depth)
 	} else {
 		typ = tmodeString(f.Type, mode, depth)
 	}
@@ -1795,6 +1793,12 @@ func typeFormat(t *types.Type, s fmt.State, verb rune, mode fmtMode) {
 func tconv(t *types.Type, flag FmtFlag, mode fmtMode, depth int) string {
 	if t == nil {
 		return "<T>"
+	}
+	if t.Etype == types.TSSA {
+		return t.Extra.(string)
+	}
+	if t.Etype == types.TTUPLE {
+		return t.FieldType(0).String() + "," + t.FieldType(1).String()
 	}
 
 	if depth > 100 {

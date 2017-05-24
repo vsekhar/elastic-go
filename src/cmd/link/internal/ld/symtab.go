@@ -147,10 +147,13 @@ func putelfsym(ctxt *Link, x *Symbol, s string, t SymbolType, addr int64, go_ *S
 	if x.Type&SHIDDEN != 0 {
 		other = STV_HIDDEN
 	}
-	if (Buildmode == BuildmodeCArchive || Buildmode == BuildmodePIE || ctxt.DynlinkingGo()) && SysArch.Family == sys.PPC64 && typ == STT_FUNC && x.Name != "runtime.duffzero" && x.Name != "runtime.duffcopy" {
+	if SysArch.Family == sys.PPC64 && typ == STT_FUNC && x.Attr.Shared() && x.Name != "runtime.duffzero" && x.Name != "runtime.duffcopy" {
 		// On ppc64 the top three bits of the st_other field indicate how
 		// many instructions separate the global and local entry points. In
 		// our case it is two instructions, indicated by the value 3.
+		// The conditions here match those in preprocess in
+		// cmd/internal/obj/ppc64/obj9.go, which is where the
+		// instructions are inserted.
 		other |= 3 << 5
 	}
 
@@ -470,7 +473,7 @@ func (ctxt *Link) symtab() {
 		switch {
 		case strings.HasPrefix(s.Name, "type."):
 			if !ctxt.DynlinkingGo() {
-				s.Attr |= AttrHidden
+				s.Attr |= AttrNotInSymbolTable
 			}
 			if UseRelro() {
 				s.Type = STYPERELRO
@@ -488,22 +491,22 @@ func (ctxt *Link) symtab() {
 		case strings.HasPrefix(s.Name, "go.itablink."):
 			nitablinks++
 			s.Type = SITABLINK
-			s.Attr |= AttrHidden
+			s.Attr |= AttrNotInSymbolTable
 			s.Outer = symitablink
 
 		case strings.HasPrefix(s.Name, "go.string."):
 			s.Type = SGOSTRING
-			s.Attr |= AttrHidden
+			s.Attr |= AttrNotInSymbolTable
 			s.Outer = symgostring
 
 		case strings.HasPrefix(s.Name, "runtime.gcbits."):
 			s.Type = SGCBITS
-			s.Attr |= AttrHidden
+			s.Attr |= AttrNotInSymbolTable
 			s.Outer = symgcbits
 
 		case strings.HasSuffix(s.Name, "·f"):
 			if !ctxt.DynlinkingGo() {
-				s.Attr |= AttrHidden
+				s.Attr |= AttrNotInSymbolTable
 			}
 			if UseRelro() {
 				s.Type = SGOFUNCRELRO
@@ -518,7 +521,7 @@ func (ctxt *Link) symtab() {
 			strings.HasPrefix(s.Name, "gclocals·"),
 			strings.HasPrefix(s.Name, "inltree."):
 			s.Type = SGOFUNC
-			s.Attr |= AttrHidden
+			s.Attr |= AttrNotInSymbolTable
 			s.Outer = symgofunc
 			s.Align = 4
 			liveness += (s.Size + int64(s.Align) - 1) &^ (int64(s.Align) - 1)

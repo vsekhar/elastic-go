@@ -498,7 +498,12 @@ OpSwitch:
 			ok |= Etype
 			n.Op = OTYPE
 			n.Type = types.NewPtr(l.Type)
-			checkwidth(l.Type) // ensure this gets dowidth'd for the backend
+			// Ensure l.Type gets dowidth'd for the backend. Issue 20174.
+			// Don't checkwidth [...] arrays, though, since they
+			// will be replaced by concrete-sized arrays. Issue 20333.
+			if !l.Type.IsDDDArray() {
+				checkwidth(l.Type)
+			}
 			n.Left = nil
 			break OpSwitch
 		}
@@ -810,7 +815,11 @@ OpSwitch:
 		var l *Node
 		for l = n.Left; l != r; l = l.Left {
 			l.SetAddrtaken(true)
-			if l.IsClosureVar() {
+			if l.IsClosureVar() && !capturevarscomplete {
+				// Mark the original variable as Addrtaken so that capturevars
+				// knows not to pass it by value.
+				// But if the capturevars phase is complete, don't touch it,
+				// in case l.Name's containing function has not yet been compiled.
 				l.Name.Defn.SetAddrtaken(true)
 			}
 		}
@@ -819,7 +828,8 @@ OpSwitch:
 			Fatalf("found non-orig name node %v", l)
 		}
 		l.SetAddrtaken(true)
-		if l.IsClosureVar() {
+		if l.IsClosureVar() && !capturevarscomplete {
+			// See comments above about closure variables.
 			l.Name.Defn.SetAddrtaken(true)
 		}
 		n.Left = defaultlit(n.Left, nil)
@@ -2156,7 +2166,9 @@ OpSwitch:
 
 	evconst(n)
 	if n.Op == OTYPE && top&Etype == 0 {
-		yyerror("type %v is not an expression", n.Type)
+		if !n.Type.Broke() {
+			yyerror("type %v is not an expression", n.Type)
+		}
 		n.Type = nil
 		return n
 	}

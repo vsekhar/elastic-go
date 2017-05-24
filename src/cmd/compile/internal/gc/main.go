@@ -33,16 +33,17 @@ var (
 )
 
 var (
-	Debug_append   int
-	Debug_asm      bool
-	Debug_closure  int
-	debug_dclstack int
-	Debug_panic    int
-	Debug_slice    int
-	Debug_vlog     bool
-	Debug_wb       int
-	Debug_pctab    string
-	Debug_remote   int
+	Debug_append       int
+	Debug_asm          bool
+	Debug_closure      int
+	Debug_compilelater int
+	debug_dclstack     int
+	Debug_panic        int
+	Debug_slice        int
+	Debug_vlog         bool
+	Debug_wb           int
+	Debug_pctab        string
+	Debug_remote       int
 )
 
 // Debug arguments.
@@ -57,6 +58,7 @@ var debugtab = []struct {
 }{
 	{"append", "print information about append compilation", &Debug_append},
 	{"closure", "print information about closure compilation", &Debug_closure},
+	{"compilelater", "compile functions as late as possible", &Debug_compilelater},
 	{"disablenil", "disable nil checks", &disable_checknil},
 	{"dclstack", "run internal dclstack check", &debug_dclstack},
 	{"gcprog", "print dump of GC programs", &Debug_gcprog},
@@ -225,6 +227,8 @@ func Main(archInit func(*Arch)) {
 	flag.StringVar(&cpuprofile, "cpuprofile", "", "write cpu profile to `file`")
 	flag.StringVar(&memprofile, "memprofile", "", "write memory profile to `file`")
 	flag.Int64Var(&memprofilerate, "memprofilerate", 0, "set runtime.MemProfileRate to `rate`")
+	var goversion string
+	flag.StringVar(&goversion, "goversion", "", "required version of the runtime")
 	flag.StringVar(&traceprofile, "traceprofile", "", "write an execution trace to `file`")
 	flag.StringVar(&blockprofile, "blockprofile", "", "write block profile to `file`")
 	flag.StringVar(&mutexprofile, "mutexprofile", "", "write mutex profile to `file`")
@@ -243,6 +247,11 @@ func Main(archInit func(*Arch)) {
 
 	if flag.NArg() < 1 && debugstr != "help" && debugstr != "ssa/help" {
 		usage()
+	}
+
+	if goversion != "" && goversion != runtime.Version() {
+		fmt.Printf("compile: version %q does not match go tool version %q\n", runtime.Version(), goversion)
+		Exit(2)
 	}
 
 	thearch.LinkArch.Init(Ctxt)
@@ -387,6 +396,8 @@ func Main(archInit func(*Arch)) {
 		Debug['l'] = 1 - Debug['l']
 	}
 
+	trackScopes = flagDWARF && Debug['l'] == 0 && Debug['N'] != 0
+
 	Widthptr = thearch.LinkArch.PtrSize
 	Widthreg = thearch.LinkArch.RegSize
 
@@ -502,6 +513,7 @@ func Main(archInit func(*Arch)) {
 			capturevars(n)
 		}
 	}
+	capturevarscomplete = true
 
 	Curfn = nil
 
@@ -1060,34 +1072,45 @@ func mkpackage(pkgname string) {
 }
 
 func clearImports() {
+	type importedPkg struct {
+		pos  src.XPos
+		path string
+		name string
+	}
+	var unused []importedPkg
+
 	for _, s := range localpkg.Syms {
-		if asNode(s.Def) == nil {
+		n := asNode(s.Def)
+		if n == nil {
 			continue
 		}
-		if asNode(s.Def).Op == OPACK {
-			// throw away top-level package name leftover
+		if n.Op == OPACK {
+			// throw away top-level package name left over
 			// from previous file.
 			// leave s->block set to cause redeclaration
 			// errors if a conflicting top-level name is
 			// introduced by a different file.
-			if !asNode(s.Def).Name.Used() && nsyntaxerrors == 0 {
-				pkgnotused(asNode(s.Def).Pos, asNode(s.Def).Name.Pkg.Path, s.Name)
+			if !n.Name.Used() && nsyntaxerrors == 0 {
+				unused = append(unused, importedPkg{n.Pos, n.Name.Pkg.Path, s.Name})
 			}
 			s.Def = nil
 			continue
 		}
-
 		if IsAlias(s) {
 			// throw away top-level name left over
 			// from previous import . "x"
-			if asNode(s.Def).Name != nil && asNode(s.Def).Name.Pack != nil && !asNode(s.Def).Name.Pack.Name.Used() && nsyntaxerrors == 0 {
-				pkgnotused(asNode(s.Def).Name.Pack.Pos, asNode(s.Def).Name.Pack.Name.Pkg.Path, "")
-				asNode(s.Def).Name.Pack.Name.SetUsed(true)
+			if n.Name != nil && n.Name.Pack != nil && !n.Name.Pack.Name.Used() && nsyntaxerrors == 0 {
+				unused = append(unused, importedPkg{n.Name.Pack.Pos, n.Name.Pack.Name.Pkg.Path, ""})
+				n.Name.Pack.Name.SetUsed(true)
 			}
-
 			s.Def = nil
 			continue
 		}
+	}
+
+	obj.SortSlice(unused, func(i, j int) bool { return unused[i].pos.Before(unused[j].pos) })
+	for _, pkg := range unused {
+		pkgnotused(pkg.pos, pkg.path, pkg.name)
 	}
 }
 
@@ -1104,6 +1127,8 @@ var concurrentFlagOK = [256]bool{
 	'I': true, // add `directory` to import search path
 	'N': true, // disable optimizations
 	'l': true, // disable inlining
+	'w': true, // all printing happens before compilation
+	'W': true, // all printing happens before compilation
 }
 
 func concurrentBackendAllowed() bool {

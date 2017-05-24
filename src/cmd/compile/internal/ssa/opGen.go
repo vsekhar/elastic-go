@@ -1294,6 +1294,11 @@ const (
 	OpPPC64SLWconst
 	OpPPC64ROTLconst
 	OpPPC64ROTLWconst
+	OpPPC64CNTLZD
+	OpPPC64CNTLZW
+	OpPPC64POPCNTD
+	OpPPC64POPCNTW
+	OpPPC64POPCNTB
 	OpPPC64FDIV
 	OpPPC64FDIVS
 	OpPPC64DIVD
@@ -16569,6 +16574,73 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
+		name:         "CNTLZD",
+		argLen:       1,
+		clobberFlags: true,
+		asm:          ppc64.ACNTLZD,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+			outputs: []outputInfo{
+				{0, 1073733624}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:         "CNTLZW",
+		argLen:       1,
+		clobberFlags: true,
+		asm:          ppc64.ACNTLZW,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+			outputs: []outputInfo{
+				{0, 1073733624}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:   "POPCNTD",
+		argLen: 1,
+		asm:    ppc64.APOPCNTD,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+			outputs: []outputInfo{
+				{0, 1073733624}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:   "POPCNTW",
+		argLen: 1,
+		asm:    ppc64.APOPCNTW,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+			outputs: []outputInfo{
+				{0, 1073733624}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
+		name:   "POPCNTB",
+		argLen: 1,
+		asm:    ppc64.APOPCNTB,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1073733630}, // SP SB R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+			outputs: []outputInfo{
+				{0, 1073733624}, // R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R14 R15 R16 R17 R18 R19 R20 R21 R22 R23 R24 R25 R26 R27 R28 R29
+			},
+		},
+	},
+	{
 		name:   "FDIV",
 		argLen: 2,
 		asm:    ppc64.AFDIV,
@@ -20356,7 +20428,6 @@ var opcodeTable = [...]opInfo{
 		name:           "MOVBstoreconst",
 		auxType:        auxSymValAndOff,
 		argLen:         2,
-		clobberFlags:   true,
 		faultOnNilArg0: true,
 		symEffect:      SymWrite,
 		asm:            s390x.AMOVB,
@@ -20370,7 +20441,6 @@ var opcodeTable = [...]opInfo{
 		name:           "MOVHstoreconst",
 		auxType:        auxSymValAndOff,
 		argLen:         2,
-		clobberFlags:   true,
 		faultOnNilArg0: true,
 		symEffect:      SymWrite,
 		asm:            s390x.AMOVH,
@@ -20384,7 +20454,6 @@ var opcodeTable = [...]opInfo{
 		name:           "MOVWstoreconst",
 		auxType:        auxSymValAndOff,
 		argLen:         2,
-		clobberFlags:   true,
 		faultOnNilArg0: true,
 		symEffect:      SymWrite,
 		asm:            s390x.AMOVW,
@@ -20398,7 +20467,6 @@ var opcodeTable = [...]opInfo{
 		name:           "MOVDstoreconst",
 		auxType:        auxSymValAndOff,
 		argLen:         2,
-		clobberFlags:   true,
 		faultOnNilArg0: true,
 		symEffect:      SymWrite,
 		asm:            s390x.AMOVD,
@@ -21755,24 +21823,28 @@ var opcodeTable = [...]opInfo{
 		generic: true,
 	},
 	{
-		name:    "AndB",
-		argLen:  2,
-		generic: true,
+		name:        "AndB",
+		argLen:      2,
+		commutative: true,
+		generic:     true,
 	},
 	{
-		name:    "OrB",
-		argLen:  2,
-		generic: true,
+		name:        "OrB",
+		argLen:      2,
+		commutative: true,
+		generic:     true,
 	},
 	{
-		name:    "EqB",
-		argLen:  2,
-		generic: true,
+		name:        "EqB",
+		argLen:      2,
+		commutative: true,
+		generic:     true,
 	},
 	{
-		name:    "NeqB",
-		argLen:  2,
-		generic: true,
+		name:        "NeqB",
+		argLen:      2,
+		commutative: true,
+		generic:     true,
 	},
 	{
 		name:    "Not",

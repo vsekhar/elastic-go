@@ -73,6 +73,13 @@ func init() {
 	}
 }
 
+// testGOROOT is the GOROOT to use when running testgo, a cmd/go binary
+// build from this process's current GOROOT, but run from a different
+// (temp) directory.
+var testGOROOT string
+
+var testCC string
+
 // The TestMain function creates a go command for testing purposes and
 // deletes it after the tests have been run.
 func TestMain(m *testing.M) {
@@ -86,6 +93,20 @@ func TestMain(m *testing.M) {
 			fmt.Fprintf(os.Stderr, "building testgo failed: %v\n%s", err, out)
 			os.Exit(2)
 		}
+
+		out, err = exec.Command("go", "env", "GOROOT").CombinedOutput()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "could not find testing GOROOT: %v\n%s", err, out)
+			os.Exit(2)
+		}
+		testGOROOT = strings.TrimSpace(string(out))
+
+		out, err = exec.Command("go", "env", "CC").CombinedOutput()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "could not find testing CC: %v\n%s", err, out)
+			os.Exit(2)
+		}
+		testCC = strings.TrimSpace(string(out))
 
 		if out, err := exec.Command("./testgo"+exeSuffix, "env", "CGO_ENABLED").Output(); err != nil {
 			fmt.Fprintf(os.Stderr, "running testgo failed: %v\n", err)
@@ -253,6 +274,13 @@ func (tg *testgoData) unsetenv(name string) {
 	}
 }
 
+func (tg *testgoData) goTool() string {
+	if tg.wd == "" {
+		return "./testgo" + exeSuffix
+	}
+	return filepath.Join(tg.wd, "testgo"+exeSuffix)
+}
+
 // doRun runs the test go command, recording stdout and stderr and
 // returning exit status.
 func (tg *testgoData) doRun(args []string) error {
@@ -266,13 +294,20 @@ func (tg *testgoData) doRun(args []string) error {
 			}
 		}
 	}
-	tg.t.Logf("running testgo %v", args)
-	var prog string
-	if tg.wd == "" {
-		prog = "./testgo" + exeSuffix
-	} else {
-		prog = filepath.Join(tg.wd, "testgo"+exeSuffix)
+
+	hasGoroot := false
+	for _, v := range tg.env {
+		if strings.HasPrefix(v, "GOROOT=") {
+			hasGoroot = true
+			break
+		}
 	}
+	prog := tg.goTool()
+	if !hasGoroot {
+		tg.setenv("GOROOT", testGOROOT)
+	}
+
+	tg.t.Logf("running testgo %v", args)
 	cmd := exec.Command(prog, args...)
 	tg.stdout.Reset()
 	tg.stderr.Reset()
@@ -1885,10 +1920,7 @@ func TestGoTestDashIDashOWritesBinary(t *testing.T) {
 
 // Issue 4568.
 func TestSymlinksList(t *testing.T) {
-	switch runtime.GOOS {
-	case "plan9", "windows":
-		t.Skipf("skipping symlink test on %s", runtime.GOOS)
-	}
+	testenv.MustHaveSymlink(t)
 
 	tg := testgo(t)
 	defer tg.cleanup()
@@ -1906,10 +1938,7 @@ func TestSymlinksList(t *testing.T) {
 
 // Issue 14054.
 func TestSymlinksVendor(t *testing.T) {
-	switch runtime.GOOS {
-	case "plan9", "windows":
-		t.Skipf("skipping symlink test on %s", runtime.GOOS)
-	}
+	testenv.MustHaveSymlink(t)
 
 	tg := testgo(t)
 	defer tg.cleanup()
@@ -1933,10 +1962,7 @@ func TestSymlinksVendor(t *testing.T) {
 
 // Issue 15201.
 func TestSymlinksVendor15201(t *testing.T) {
-	switch runtime.GOOS {
-	case "plan9", "windows":
-		t.Skipf("skipping symlink test on %s", runtime.GOOS)
-	}
+	testenv.MustHaveSymlink(t)
 
 	tg := testgo(t)
 	defer tg.cleanup()
@@ -1953,10 +1979,7 @@ func TestSymlinksVendor15201(t *testing.T) {
 }
 
 func TestSymlinksInternal(t *testing.T) {
-	switch runtime.GOOS {
-	case "plan9", "windows":
-		t.Skipf("skipping symlink test on %s", runtime.GOOS)
-	}
+	testenv.MustHaveSymlink(t)
 
 	tg := testgo(t)
 	defer tg.cleanup()
@@ -3067,7 +3090,7 @@ func TestGoTestRaceInstallCgo(t *testing.T) {
 	tg.run("test", "-race", "-i", "runtime/race")
 	new, err := os.Stat(cgo)
 	tg.must(err)
-	if new.ModTime() != old.ModTime() {
+	if !new.ModTime().Equal(old.ModTime()) {
 		t.Fatalf("go test -i runtime/race reinstalled cmd/cgo")
 	}
 }
@@ -3899,4 +3922,261 @@ func TestBuildTagsNoComma(t *testing.T) {
 	tg.grepBoth("space-separated list contains comma", "-tags with a comma-separated list didn't error")
 	tg.runFail("build", "-tags", "tag1,tag2", "math")
 	tg.grepBoth("space-separated list contains comma", "-tags with a comma-separated list didn't error")
+}
+
+func copyFile(src, dst string, perm os.FileMode) error {
+	sf, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer sf.Close()
+
+	df, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(df, sf)
+	err2 := df.Close()
+	if err != nil {
+		return err
+	}
+	return err2
+}
+
+func TestExecutableGOROOT(t *testing.T) {
+	if runtime.GOOS == "openbsd" {
+		t.Skipf("test case does not work on %s, missing os.Executable", runtime.GOOS)
+	}
+
+	tg := testgo(t)
+	defer tg.cleanup()
+
+	tg.makeTempdir()
+	tg.tempDir("newgoroot/bin")
+	newGoTool := tg.path("newgoroot/bin/go" + exeSuffix)
+	err := copyFile(tg.goTool(), newGoTool, 0775)
+	if err != nil {
+		t.Fatalf("error copying go tool %v", err)
+	}
+
+	goroot := func(goTool string) string {
+		cmd := exec.Command(goTool, "env", "GOROOT")
+		cmd.Env = os.Environ()
+		for i, val := range cmd.Env {
+			if strings.HasPrefix(val, "GOROOT=") {
+				cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
+				break
+			}
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("copied go tool failed %v: %s", err, out)
+		}
+		root := strings.TrimSpace(string(out))
+		resolved, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) failed: %v", root, err)
+		}
+		return resolved
+	}
+
+	// Filenames are case insensitive on Windows.
+	// There should probably be a path/filepath function for this.
+	equal := func(a, b string) bool { return a == b }
+	if runtime.GOOS == "windows" {
+		equal = strings.EqualFold
+	}
+
+	// macOS uses a symlink for /tmp.
+	resolvedTestGOROOT, err := filepath.EvalSymlinks(testGOROOT)
+	if err != nil {
+		t.Fatalf("could not eval testgoroot symlinks: %v", err)
+	}
+
+	// Missing GOROOT/pkg/tool, the go tool should fall back to
+	// its default path.
+	if got, want := goroot(newGoTool), resolvedTestGOROOT; !equal(got, want) {
+		t.Fatalf("%s env GOROOT = %q, want %q", newGoTool, got, want)
+	}
+
+	// Now the executable's path looks like a GOROOT.
+	tg.tempDir("newgoroot/pkg/tool")
+	resolvedNewGOROOT, err := filepath.EvalSymlinks(tg.path("newgoroot"))
+	if err != nil {
+		t.Fatalf("could not eval newgoroot symlinks: %v", err)
+	}
+	if got, want := goroot(newGoTool), resolvedNewGOROOT; !equal(got, want) {
+		t.Fatalf("%s env GOROOT = %q with pkg/tool, want %q", newGoTool, got, want)
+	}
+
+	testenv.MustHaveSymlink(t)
+
+	tg.tempDir("notgoroot/bin")
+	symGoTool := tg.path("notgoroot/bin/go" + exeSuffix)
+	tg.must(os.Symlink(newGoTool, symGoTool))
+
+	if got, want := goroot(symGoTool), resolvedNewGOROOT; !equal(got, want) {
+		t.Fatalf("%s env GOROOT = %q, want %q", symGoTool, got, want)
+	}
+}
+
+func TestNeedVersion(t *testing.T) {
+	tg := testgo(t)
+	defer tg.cleanup()
+	tg.parallel()
+	tg.tempFile("goversion.go", `package main; func main() {}`)
+	path := tg.path("goversion.go")
+	tg.setenv("TESTGO_VERSION", "go1.testgo")
+	tg.runFail("run", path)
+	tg.grepStderr("compile", "does not match go tool version")
+}
+
+// Test that user can override default code generation flags.
+func TestUserOverrideFlags(t *testing.T) {
+	if !canCgo {
+		t.Skip("skipping because cgo not enabled")
+	}
+	if runtime.GOOS != "linux" {
+		// We are testing platform-independent code, so it's
+		// OK to skip cases that work differently.
+		t.Skipf("skipping on %s because test only works if c-archive implies -shared", runtime.GOOS)
+	}
+
+	tg := testgo(t)
+	defer tg.cleanup()
+	tg.parallel()
+	tg.tempFile("override.go", `package main
+
+import "C"
+
+//export GoFunc
+func GoFunc() {}
+
+func main() {}`)
+	tg.creatingTemp("override.a")
+	tg.creatingTemp("override.h")
+	tg.run("build", "-x", "-buildmode=c-archive", "-gcflags=-shared=false", tg.path("override.go"))
+	tg.grepStderr("compile .*-shared .*-shared=false", "user can not override code generation flag")
+}
+
+func TestCgoFlagContainsSpace(t *testing.T) {
+	if !canCgo {
+		t.Skip("skipping because cgo not enabled")
+	}
+
+	tg := testgo(t)
+	defer tg.cleanup()
+
+	ccName := filepath.Base(testCC)
+
+	tg.tempFile(fmt.Sprintf("src/%s/main.go", ccName), fmt.Sprintf(`package main
+		import (
+			"os"
+			"os/exec"
+		)
+
+		func main() {
+			cmd := exec.Command(%q, os.Args[1:]...)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			err := cmd.Run()
+			if err != nil {
+				panic(err)
+			}
+
+			if os.Args[len(os.Args)-1] == "trivial.c" {
+				return
+			}
+
+			var success bool
+			for _, arg := range os.Args {
+				switch arg {
+				case "-Ic flags":
+					if success {
+						panic("duplicate CFLAGS")
+					}
+					success = true
+				case "-Lld flags":
+					if success {
+						panic("duplicate LDFLAGS")
+					}
+					success = true
+				}
+			}
+			if !success {
+				panic("args should contains '-Ic flags' or '-Lld flags'")
+			}
+		}
+	`, testCC))
+	tg.cd(tg.path(fmt.Sprintf("src/%s", ccName)))
+	tg.run("build")
+	tg.setenv("CC", tg.path(fmt.Sprintf("src/%s/%s", ccName, ccName)))
+
+	tg.tempFile("src/cgo/main.go", `package main
+		// #cgo CFLAGS: -I"c flags"
+		// #cgo LDFLAGS: -L"ld flags"
+		import "C"
+		func main() {}
+	`)
+	tg.cd(tg.path("src/cgo"))
+	tg.run("run", "main.go")
+}
+
+// Issue #20435.
+func TestGoTestRaceCoverModeFailures(t *testing.T) {
+	if !canRace {
+		t.Skip("skipping because race detector not supported")
+	}
+
+	tg := testgo(t)
+	tg.parallel()
+	defer tg.cleanup()
+	tg.setenv("GOPATH", filepath.Join(tg.pwd(), "testdata"))
+
+	tg.run("test", "testrace")
+
+	tg.runFail("test", "-race", "-covermode=set", "testrace")
+	tg.grepStderr(`-covermode must be "atomic", not "set", when -race is enabled`, "-race -covermode=set was allowed")
+	tg.grepBothNot("PASS", "something passed")
+}
+
+// Issue 9737: verify that GOARM and GO386 affect the computed build ID.
+func TestBuildIDContainsArchModeEnv(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+
+	var tg *testgoData
+	testWith := func(before, after func()) func(*testing.T) {
+		return func(t *testing.T) {
+			tg = testgo(t)
+			defer tg.cleanup()
+			tg.tempFile("src/mycmd/x.go", `package main
+func main() {}`)
+			tg.setenv("GOPATH", tg.path("."))
+
+			tg.cd(tg.path("src/mycmd"))
+			tg.setenv("GOOS", "linux")
+			before()
+			tg.run("install", "mycmd")
+			after()
+			tg.wantStale("mycmd", "build ID mismatch", "should be stale after environment variable change")
+		}
+	}
+
+	t.Run("386", testWith(func() {
+		tg.setenv("GOARCH", "386")
+		tg.setenv("GO386", "387")
+	}, func() {
+		tg.setenv("GO386", "")
+	}))
+
+	t.Run("arm", testWith(func() {
+		tg.setenv("GOARCH", "arm")
+		tg.setenv("GOARM", "5")
+	}, func() {
+		tg.setenv("GOARM", "7")
+	}))
 }

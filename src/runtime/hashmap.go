@@ -255,9 +255,8 @@ func makemap(t *maptype, hint int64, h *hmap, bucket unsafe.Pointer) *hmap {
 		throw("bad hmap size")
 	}
 
-	if hint < 0 || int64(int32(hint)) != hint {
-		panic(plainError("makemap: size out of range"))
-		// TODO: make hint an int, then none of this nonsense
+	if hint < 0 || hint > int64(maxSliceCap(t.bucket.size)) {
+		hint = 0
 	}
 
 	if !ismapkey(t.key) {
@@ -985,7 +984,7 @@ func hashGrow(t *maptype, h *hmap) {
 // overLoadFactor reports whether count items placed in 1<<B buckets is over loadFactor.
 func overLoadFactor(count int64, B uint8) bool {
 	// TODO: rewrite to use integer math and comparison?
-	return count >= bucketCnt && float32(count) >= loadFactor*float32((uintptr(1)<<B))
+	return count >= bucketCnt && float32(count) >= loadFactor*float32((uint64(1)<<B))
 }
 
 // tooManyOverflowBuckets reports whether noverflow buckets is too many for a map with 1<<B buckets.

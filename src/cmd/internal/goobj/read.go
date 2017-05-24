@@ -507,7 +507,7 @@ func (r *objReader) parseObject(prefix []byte) error {
 			break
 		}
 
-		typ := r.readInt()
+		typ := r.readByte()
 		s := &Sym{SymID: r.readSymID()}
 		r.p.Syms = append(r.p.Syms, s)
 		s.Kind = objabi.SymKind(typ)
@@ -532,7 +532,7 @@ func (r *objReader) parseObject(prefix []byte) error {
 			f.Args = r.readInt()
 			f.Frame = r.readInt()
 			flags := r.readInt()
-			f.Leaf = flags&1 != 0
+			f.Leaf = flags&(1<<0) != 0
 			f.NoSplit = r.readInt() != 0
 			f.Var = make([]Var, r.readInt())
 			for i := range f.Var {

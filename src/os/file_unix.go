@@ -20,11 +20,22 @@ func fixLongPath(path string) string {
 func rename(oldname, newname string) error {
 	fi, err := Lstat(newname)
 	if err == nil && fi.IsDir() {
+		// There are two independent errors this function can return:
+		// one for a bad oldname, and one for a bad newname.
+		// At this point we've determined the newname is bad.
+		// But just in case oldname is also bad, prioritize returning
+		// the oldname error because that's what we did historically.
+		if _, err := Lstat(oldname); err != nil {
+			if pe, ok := err.(*PathError); ok {
+				err = pe.Err
+			}
+			return &LinkError{"rename", oldname, newname, err}
+		}
 		return &LinkError{"rename", oldname, newname, syscall.EEXIST}
 	}
-	e := syscall.Rename(oldname, newname)
-	if e != nil {
-		return &LinkError{"rename", oldname, newname, e}
+	err = syscall.Rename(oldname, newname)
+	if err != nil {
+		return &LinkError{"rename", oldname, newname, err}
 	}
 	return nil
 }
@@ -59,7 +70,9 @@ func (f *File) Fd() uintptr {
 	return uintptr(f.pfd.Sysfd)
 }
 
-// NewFile returns a new File with the given file descriptor and name.
+// NewFile returns a new File with the given file descriptor and
+// name. The returned value will be nil if fd is not a valid file
+// descriptor.
 func NewFile(fd uintptr, name string) *File {
 	return newFile(fd, name, false)
 }

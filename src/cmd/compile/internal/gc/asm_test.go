@@ -364,7 +364,19 @@ var linuxAMD64Tests = []*asmTest{
 		`,
 		[]string{"\tMOVQ\t\\$0, \\(.*\\)", "\tMOVQ\t\\$0, 8\\(.*\\)", "\tMOVQ\t\\$0, 16\\(.*\\)"},
 	},
-	// TODO: add a test for *t = T{3,4,5} when we fix that.
+	// SSA-able composite literal initialization. Issue 18872.
+	{
+		`
+		type T18872 struct {
+			a, b, c, d int
+		}
+
+		func f18872(p *T18872) {
+			*p = T18872{1, 2, 3, 4}
+		}
+		`,
+		[]string{"\tMOVQ\t[$]1", "\tMOVQ\t[$]2", "\tMOVQ\t[$]3", "\tMOVQ\t[$]4"},
+	},
 	// Also test struct containing pointers (this was special because of write barriers).
 	{
 		`
@@ -567,7 +579,7 @@ var linuxAMD64Tests = []*asmTest{
 			return bits.TrailingZeros64(a)
 		}
 		`,
-		[]string{"\tBSFQ\t", "\tMOVQ\t\\$64,", "\tCMOVQEQ\t"},
+		[]string{"\tBSFQ\t", "\tMOVL\t\\$64,", "\tCMOVQEQ\t"},
 	},
 	{
 		`
@@ -1423,6 +1435,16 @@ var linuxARM64Tests = []*asmTest{
 		}
 		`,
 		[]string{"\tAND\t"},
+	},
+	{
+		// make sure offsets are folded into load and store.
+		`
+		func f36(_, a [20]byte) (b [20]byte) {
+			b = a
+			return
+		}
+		`,
+		[]string{"\tMOVD\t\"\"\\.a\\+[0-9]+\\(RSP\\), R[0-9]+", "\tMOVD\tR[0-9]+, \"\"\\.b\\+[0-9]+\\(RSP\\)"},
 	},
 }
 

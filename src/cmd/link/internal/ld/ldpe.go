@@ -162,12 +162,6 @@ func ldpeError(ctxt *Link, input *bio.Reader, pkg string, length int64, pn strin
 			continue
 		}
 
-		data, err := sect.Data()
-		if err != nil {
-			return err
-		}
-		sectdata[sect] = data
-
 		name := fmt.Sprintf("%s(%s)", pkg, sect.Name)
 		s := ctxt.Syms.Lookup(name, localSymVersion)
 
@@ -188,8 +182,15 @@ func ldpeError(ctxt *Link, input *bio.Reader, pkg string, length int64, pn strin
 			return fmt.Errorf("unexpected flags %#06x for PE section %s", sect.Characteristics, sect.Name)
 		}
 
-		s.P = data
-		s.Size = int64(len(data))
+		if s.Type != SNOPTRBSS {
+			data, err := sect.Data()
+			if err != nil {
+				return err
+			}
+			sectdata[sect] = data
+			s.P = data
+		}
+		s.Size = int64(sect.Size)
 		sectsyms[sect] = s
 		if sect.Name == ".rsrc" {
 			setpersrc(ctxt, s)

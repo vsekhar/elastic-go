@@ -87,6 +87,33 @@ func TestCPUProfileMultithreaded(t *testing.T) {
 	})
 }
 
+func TestCPUProfileInlining(t *testing.T) {
+	testCPUProfile(t, []string{"runtime/pprof.inlinedCallee", "runtime/pprof.inlinedCaller"}, func(dur time.Duration) {
+		cpuHogger(inlinedCaller, dur)
+	})
+}
+
+func inlinedCaller() {
+	inlinedCallee()
+}
+
+func inlinedCallee() {
+	// We could just use cpuHog1, but for loops prevent inlining
+	// right now. :(
+	foo := salt1
+	i := 0
+loop:
+	if foo > 0 {
+		foo *= foo
+	} else {
+		foo *= foo + 1
+	}
+	if i++; i < 1e5 {
+		goto loop
+	}
+	salt1 = foo
+}
+
 func parseProfile(t *testing.T, valBytes []byte, f func(uintptr, []*profile.Location, map[string][]string)) {
 	p, err := profile.Parse(bytes.NewReader(valBytes))
 	if err != nil {
@@ -575,22 +602,25 @@ func func3(c chan int) { <-c }
 func func4(c chan int) { <-c }
 
 func TestGoroutineCounts(t *testing.T) {
-	if runtime.GOOS == "openbsd" {
-		testenv.SkipFlaky(t, 15156)
-	}
+	// Setting GOMAXPROCS to 1 ensures we can force all goroutines to the
+	// desired blocking point.
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+
 	c := make(chan int)
 	for i := 0; i < 100; i++ {
-		if i%10 == 0 {
+		switch {
+		case i%10 == 0:
 			go func1(c)
-			continue
-		}
-		if i%2 == 0 {
+		case i%2 == 0:
 			go func2(c)
-			continue
+		default:
+			go func3(c)
 		}
-		go func3(c)
+		// Let goroutines block on channel
+		for j := 0; j < 5; j++ {
+			runtime.Gosched()
+		}
 	}
-	time.Sleep(10 * time.Millisecond) // let goroutines block on channel
 
 	var w bytes.Buffer
 	goroutineProf := Lookup("goroutine")

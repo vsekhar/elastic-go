@@ -8,7 +8,6 @@
 //   - assign global variables and types to their packages
 //   - gdb uses c syntax, meaning clumsy quoting is needed for go identifiers. eg
 //     ptype struct '[]uint8' and qualifiers need to be quoted away
-//   - lexical scoping is lost, so gdb gets confused as to which 'main.i' you mean.
 //   - file:line info for variables
 //   - make strings a typedef so prettyprinters can see the underlying string type
 
@@ -76,6 +75,7 @@ var arangessec *Symbol
 var framesec *Symbol
 var infosec *Symbol
 var linesec *Symbol
+var rangesec *Symbol
 
 var gdbscript string
 
@@ -147,7 +147,7 @@ func newdie(ctxt *Link, parent *dwarf.DWDie, abbrev int, name string, version in
 	if name != "" && (abbrev <= dwarf.DW_ABRV_VARIABLE || abbrev >= dwarf.DW_ABRV_NULLTYPE) {
 		if abbrev != dwarf.DW_ABRV_VARIABLE || version == 0 {
 			sym := ctxt.Syms.Lookup(dwarf.InfoPrefix+name, version)
-			sym.Attr |= AttrHidden
+			sym.Attr |= AttrNotInSymbolTable
 			sym.Type = SDWARFINFO
 			die.Sym = sym
 		}
@@ -339,7 +339,7 @@ func dotypedef(ctxt *Link, parent *dwarf.DWDie, name string, def *dwarf.DWDie) {
 	}
 
 	sym := ctxt.Syms.Lookup(dtolsym(def.Sym).Name+"..def", 0)
-	sym.Attr |= AttrHidden
+	sym.Attr |= AttrNotInSymbolTable
 	sym.Type = SDWARFINFO
 	def.Sym = sym
 
@@ -872,7 +872,7 @@ func finddebugruntimepath(s *Symbol) {
 
 	for i := range s.FuncInfo.File {
 		f := s.FuncInfo.File[i]
-		if i := strings.Index(f.Name, "runtime/runtime.go"); i >= 0 {
+		if i := strings.Index(f.Name, "runtime/debug.go"); i >= 0 {
 			gdbscript = f.Name[:i] + "runtime/runtime-gdb.py"
 			break
 		}
@@ -1024,6 +1024,8 @@ func writelines(ctxt *Link, syms []*Symbol) ([]*Symbol, []*Symbol) {
 	// OS X linker requires compilation dir or absolute path in comp unit name to output debug info.
 	compDir := getCompilationDir()
 	newattr(dwinfo, dwarf.DW_AT_comp_dir, dwarf.DW_CLS_STRING, int64(len(compDir)), compDir)
+	producer := "Go cmd/compile " + objabi.Version
+	newattr(dwinfo, dwarf.DW_AT_producer, dwarf.DW_CLS_STRING, int64(len(producer)), producer)
 
 	// Write .debug_line Line Number Program Header (sec 6.2.4)
 	// Fields marked with (*) must be changed for 64-bit dwarf
@@ -1081,7 +1083,7 @@ func writelines(ctxt *Link, syms []*Symbol) ([]*Symbol, []*Symbol) {
 		epcs = s
 
 		dsym := ctxt.Syms.Lookup(dwarf.InfoPrefix+s.Name, int(s.Version))
-		dsym.Attr |= AttrHidden | AttrReachable
+		dsym.Attr |= AttrNotInSymbolTable | AttrReachable
 		dsym.Type = SDWARFINFO
 		for _, r := range dsym.R {
 			if r.Type == objabi.R_DWARFREF && r.Sym.Size == 0 {
@@ -1289,6 +1291,33 @@ func writeframes(ctxt *Link, syms []*Symbol) []*Symbol {
 	return syms
 }
 
+func writeranges(ctxt *Link, syms []*Symbol) []*Symbol {
+	if rangesec == nil {
+		rangesec = ctxt.Syms.Lookup(".debug_ranges", 0)
+	}
+	rangesec.Type = SDWARFSECT
+	rangesec.Attr |= AttrReachable
+	rangesec.R = rangesec.R[:0]
+
+	for _, s := range ctxt.Textp {
+		rangeSym := ctxt.Syms.Lookup(dwarf.RangePrefix+s.Name, int(s.Version))
+		rangeSym.Attr |= AttrReachable
+		rangeSym.Type = SDWARFRANGE
+		rangeSym.Value = rangesec.Size
+		rangesec.P = append(rangesec.P, rangeSym.P...)
+		for _, r := range rangeSym.R {
+			r.Off += int32(rangesec.Size)
+			rangesec.R = append(rangesec.R, r)
+		}
+		rangesec.Size += rangeSym.Size
+	}
+	if rangesec.Size > 0 {
+		// PE does not like empty sections
+		syms = append(syms, rangesec)
+	}
+	return syms
+}
+
 /*
  *  Walk DWarfDebugInfoEntries, and emit .debug_info
  */
@@ -1319,7 +1348,7 @@ func writeinfo(ctxt *Link, syms []*Symbol, funcs []*Symbol) []*Symbol {
 		// Fields marked with (*) must be changed for 64-bit dwarf
 		// This must match COMPUNITHEADERSIZE above.
 		Adduint32(ctxt, s, 0) // unit_length (*), will be filled in later.
-		Adduint16(ctxt, s, 2) // dwarf version (appendix F)
+		Adduint16(ctxt, s, 3) // dwarf version (appendix F)
 
 		// debug_abbrev_offset (*)
 		adddwarfref(ctxt, s, abbrevsym, 4)
@@ -1448,6 +1477,15 @@ func writearanges(ctxt *Link, syms []*Symbol) []*Symbol {
 }
 
 func writegdbscript(ctxt *Link, syms []*Symbol) []*Symbol {
+	if Linkmode == LinkExternal && Headtype == objabi.Hwindows && Buildmode == BuildmodeCArchive {
+		// gcc on Windows places .debug_gdb_scripts in the wrong location, which
+		// causes the program not to run. See https://golang.org/issue/20183
+		// Non c-archives can avoid this issue via a linker script
+		// (see fix near writeGDBLinkerScript).
+		// c-archive users would need to specify the linker script manually.
+		// For UX it's better not to deal with this.
+		return syms
+	}
 
 	if gdbscript != "" {
 		s := ctxt.Syms.Lookup(".debug_gdb_scripts", 0)
@@ -1542,6 +1580,7 @@ func dwarfgeneratedebugsyms(ctxt *Link) {
 	syms := writeabbrev(ctxt, nil)
 	syms, funcs := writelines(ctxt, syms)
 	syms = writeframes(ctxt, syms)
+	syms = writeranges(ctxt, syms)
 
 	synthesizestringtypes(ctxt, dwtypes.Child)
 	synthesizeslicetypes(ctxt, dwtypes.Child)
@@ -1583,6 +1622,7 @@ func dwarfaddshstrings(ctxt *Link, shstrtab *Symbol) {
 	Addstring(shstrtab, ".debug_pubnames")
 	Addstring(shstrtab, ".debug_pubtypes")
 	Addstring(shstrtab, ".debug_gdb_scripts")
+	Addstring(shstrtab, ".debug_ranges")
 	if Linkmode == LinkExternal {
 		Addstring(shstrtab, elfRelType+".debug_info")
 		Addstring(shstrtab, elfRelType+".debug_aranges")
@@ -1590,6 +1630,7 @@ func dwarfaddshstrings(ctxt *Link, shstrtab *Symbol) {
 		Addstring(shstrtab, elfRelType+".debug_frame")
 		Addstring(shstrtab, elfRelType+".debug_pubnames")
 		Addstring(shstrtab, elfRelType+".debug_pubtypes")
+		Addstring(shstrtab, elfRelType+".debug_ranges")
 	}
 }
 
@@ -1610,6 +1651,10 @@ func dwarfaddelfsectionsyms(ctxt *Link) {
 	putelfsectionsym(sym, sym.Sect.Elfsect.shnum)
 	sym = ctxt.Syms.Lookup(".debug_frame", 0)
 	putelfsectionsym(sym, sym.Sect.Elfsect.shnum)
+	sym = ctxt.Syms.Lookup(".debug_ranges", 0)
+	if sym.Sect != nil {
+		putelfsectionsym(sym, sym.Sect.Elfsect.shnum)
+	}
 }
 
 /*

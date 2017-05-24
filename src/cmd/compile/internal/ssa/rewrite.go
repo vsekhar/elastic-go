@@ -5,6 +5,7 @@
 package ssa
 
 import (
+	"cmd/compile/internal/types"
 	"cmd/internal/obj"
 	"fmt"
 	"io"
@@ -84,39 +85,39 @@ func applyRewrite(f *Func, rb blockRewriter, rv valueRewriter) {
 
 // Common functions called from rewriting rules
 
-func is64BitFloat(t Type) bool {
+func is64BitFloat(t *types.Type) bool {
 	return t.Size() == 8 && t.IsFloat()
 }
 
-func is32BitFloat(t Type) bool {
+func is32BitFloat(t *types.Type) bool {
 	return t.Size() == 4 && t.IsFloat()
 }
 
-func is64BitInt(t Type) bool {
+func is64BitInt(t *types.Type) bool {
 	return t.Size() == 8 && t.IsInteger()
 }
 
-func is32BitInt(t Type) bool {
+func is32BitInt(t *types.Type) bool {
 	return t.Size() == 4 && t.IsInteger()
 }
 
-func is16BitInt(t Type) bool {
+func is16BitInt(t *types.Type) bool {
 	return t.Size() == 2 && t.IsInteger()
 }
 
-func is8BitInt(t Type) bool {
+func is8BitInt(t *types.Type) bool {
 	return t.Size() == 1 && t.IsInteger()
 }
 
-func isPtr(t Type) bool {
+func isPtr(t *types.Type) bool {
 	return t.IsPtrShaped()
 }
 
-func isSigned(t Type) bool {
+func isSigned(t *types.Type) bool {
 	return t.IsSigned()
 }
 
-func typeSize(t Type) int64 {
+func typeSize(t *types.Type) int64 {
 	return t.Size()
 }
 
@@ -283,20 +284,6 @@ func isAuto(s interface{}) bool {
 	return ok
 }
 
-func fitsARM64Offset(off, align int64, sym interface{}) bool {
-	// only small offset (between -256 and 256) or offset that is a multiple of data size
-	// can be encoded in the instructions
-	// since this rewriting takes place before stack allocation, the offset to SP is unknown,
-	// so don't do it for args and locals with unaligned offset
-	if !is32Bit(off) {
-		return false
-	}
-	if align == 1 {
-		return true
-	}
-	return !isArg(sym) && (off%align == 0 || off < 256 && off > -256 && !isAuto(sym))
-}
-
 // isSameSym returns whether sym is the same as the given named symbol
 func isSameSym(sym interface{}, name string) bool {
 	s, ok := sym.(fmt.Stringer)
@@ -363,6 +350,11 @@ func is32Bit(n int64) bool {
 // is16Bit reports whether n can be represented as a signed 16 bit integer.
 func is16Bit(n int64) bool {
 	return n == int64(int16(n))
+}
+
+// isU12Bit reports whether n can be represented as an unsigned 12 bit integer.
+func isU12Bit(n int64) bool {
+	return 0 <= n && n < (1<<12)
 }
 
 // isU16Bit reports whether n can be represented as an unsigned 16 bit integer.
@@ -634,5 +626,17 @@ func isARMImmRot(v uint32) bool {
 		v = v<<2 | v>>30
 	}
 
+	return false
+}
+
+// overlap reports whether the ranges given by the given offset and
+// size pairs overlap.
+func overlap(offset1, size1, offset2, size2 int64) bool {
+	if offset1 >= offset2 && offset2+size2 > offset1 {
+		return true
+	}
+	if offset2 >= offset1 && offset1+size1 > offset2 {
+		return true
+	}
 	return false
 }
