@@ -154,8 +154,11 @@ var optab = []Optab{
 	{AMVN, C_SCON, C_NONE, C_REG, 13, 8, 0, 0, 0},
 	{ACMP, C_SCON, C_REG, C_NONE, 13, 8, 0, 0, 0},
 	{AADD, C_RCON2A, C_REG, C_REG, 106, 8, 0, 0, 0},
+	{AADD, C_RCON2A, C_NONE, C_REG, 106, 8, 0, 0, 0},
 	{AORR, C_RCON2A, C_REG, C_REG, 106, 8, 0, 0, 0},
+	{AORR, C_RCON2A, C_NONE, C_REG, 106, 8, 0, 0, 0},
 	{AADD, C_RCON2S, C_REG, C_REG, 107, 8, 0, 0, 0},
+	{AADD, C_RCON2S, C_NONE, C_REG, 107, 8, 0, 0, 0},
 	{AADD, C_LCON, C_REG, C_REG, 13, 8, 0, LFROM, 0},
 	{AADD, C_LCON, C_NONE, C_REG, 13, 8, 0, LFROM, 0},
 	{AAND, C_LCON, C_REG, C_REG, 13, 8, 0, LFROM, 0},
@@ -228,8 +231,9 @@ var optab = []Optab{
 	{AMOVF, C_FREG, C_NONE, C_ADDR, 68, 8, 0, LTO | LPCREL, 4},
 	{AMOVF, C_ADDR, C_NONE, C_FREG, 69, 8, 0, LFROM | LPCREL, 4},
 	{AADDF, C_FREG, C_NONE, C_FREG, 54, 4, 0, 0, 0},
-	{AADDF, C_FREG, C_REG, C_FREG, 54, 4, 0, 0, 0},
-	{AMOVF, C_FREG, C_NONE, C_FREG, 54, 4, 0, 0, 0},
+	{AADDF, C_FREG, C_FREG, C_FREG, 54, 4, 0, 0, 0},
+	{AMOVF, C_FREG, C_NONE, C_FREG, 55, 4, 0, 0, 0},
+	{ANEGF, C_FREG, C_NONE, C_FREG, 55, 4, 0, 0, 0},
 	{AMOVW, C_REG, C_NONE, C_FCR, 56, 4, 0, 0, 0},
 	{AMOVW, C_FCR, C_NONE, C_REG, 57, 4, 0, 0, 0},
 	{AMOVW, C_SHIFT, C_NONE, C_REG, 59, 4, 0, 0, 0},
@@ -284,7 +288,7 @@ var optab = []Optab{
 	{ASTREX, C_SOREG, C_REG, C_REG, 78, 4, 0, 0, 0},
 	{AMOVF, C_ZFCON, C_NONE, C_FREG, 80, 8, 0, 0, 0},
 	{AMOVF, C_SFCON, C_NONE, C_FREG, 81, 4, 0, 0, 0},
-	{ACMPF, C_FREG, C_REG, C_NONE, 82, 8, 0, 0, 0},
+	{ACMPF, C_FREG, C_FREG, C_NONE, 82, 8, 0, 0, 0},
 	{ACMPF, C_FREG, C_NONE, C_NONE, 83, 8, 0, 0, 0},
 	{AMOVFW, C_FREG, C_NONE, C_FREG, 84, 4, 0, 0, 0},
 	{AMOVWF, C_FREG, C_NONE, C_FREG, 85, 4, 0, 0, 0},
@@ -1062,7 +1066,7 @@ func immrot2a(v uint32) (uint32, uint32) {
 // such that the encoded constants y, x satisfy y-x==v, y&x==0.
 // Returns 0,0 if no such decomposition of v exists.
 func immrot2s(v uint32) (uint32, uint32) {
-	if immrot(v) == 0 {
+	if immrot(v) != 0 {
 		return v, 0
 	}
 	// suppose v in the form of {leading 00, upper effective bits, lower 8 effective bits, trailing 00}
@@ -1258,11 +1262,15 @@ func (c *ctxt5) aclass(a *obj.Addr) int {
 			if uint32(c.instoffset) <= 0xffff && objabi.GOARM == 7 {
 				return C_SCON
 			}
-			if x, y := immrot2a(uint32(c.instoffset)); x != 0 && y != 0 {
-				return C_RCON2A
-			}
-			if y, x := immrot2s(uint32(c.instoffset)); x != 0 && y != 0 {
-				return C_RCON2S
+			if c.ctxt.Headtype != objabi.Hnacl {
+				// Don't split instructions on NaCl. The validator is not
+				// happy with it. See Issue 20595.
+				if x, y := immrot2a(uint32(c.instoffset)); x != 0 && y != 0 {
+					return C_RCON2A
+				}
+				if y, x := immrot2s(uint32(c.instoffset)); x != 0 && y != 0 {
+					return C_RCON2S
+				}
 			}
 			return C_LCON
 
@@ -1325,7 +1333,14 @@ func (c *ctxt5) oplook(p *obj.Prog) *Optab {
 	a3--
 	a2 := C_NONE
 	if p.Reg != 0 {
-		a2 = C_REG
+		switch {
+		case REG_F0 <= p.Reg && p.Reg <= REG_F15:
+			a2 = C_FREG
+		case REG_R0 <= p.Reg && p.Reg <= REG_R15:
+			a2 = C_REG
+		default:
+			c.ctxt.Diag("invalid register in %v", p)
+		}
 	}
 
 	// If current instruction has a .S suffix (flags update),
@@ -1353,8 +1368,7 @@ func (c *ctxt5) oplook(p *obj.Prog) *Optab {
 		}
 	}
 
-	c.ctxt.Diag("illegal combination %v; %v %v %v, %d %d", p, DRconv(a1), DRconv(a2), DRconv(a3), p.From.Type, p.To.Type)
-	c.ctxt.Diag("from %d %d to %d %d\n", p.From.Type, p.From.Name, p.To.Type, p.To.Name)
+	c.ctxt.Diag("illegal combination %v; %v %v %v; from %d %d; to %d %d", p, DRconv(a1), DRconv(a2), DRconv(a3), p.From.Type, p.From.Name, p.To.Type, p.To.Name)
 	if ops == nil {
 		ops = optab
 	}
@@ -1590,14 +1604,15 @@ func buildop(ctxt *obj.Link) {
 			opset(AMULD, r0)
 			opset(ADIVF, r0)
 			opset(ADIVD, r0)
+
+		case ANEGF:
+			opset(ANEGD, r0)
 			opset(ASQRTF, r0)
 			opset(ASQRTD, r0)
 			opset(AMOVFD, r0)
 			opset(AMOVDF, r0)
 			opset(AABSF, r0)
 			opset(AABSD, r0)
-			opset(ANEGF, r0)
-			opset(ANEGD, r0)
 
 		case ACMPF:
 			opset(ACMPD, r0)
@@ -1709,6 +1724,9 @@ func (c *ctxt5) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		c.aclass(&p.From)
 		r := int(p.Reg)
 		rt := int(p.To.Reg)
+		if r == 0 {
+			r = rt
+		}
 		x, y := immrot2a(uint32(c.instoffset))
 		var as2 obj.As
 		switch p.As {
@@ -1736,6 +1754,9 @@ func (c *ctxt5) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		c.aclass(&p.From)
 		r := int(p.Reg)
 		rt := int(p.To.Reg)
+		if r == 0 {
+			r = rt
+		}
 		y, x := immrot2s(uint32(c.instoffset))
 		var as2 obj.As
 		switch p.As {
@@ -2045,7 +2066,7 @@ func (c *ctxt5) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		o1 |= (uint32(p.To.Reg) & 15) << 12
 
 	case 36: /* mov R,PSR */
-		o1 = 2<<23 | 0x29f<<12 | 0<<4
+		o1 = 2<<23 | 0x2cf<<12 | 0<<4
 
 		if p.Scond&C_FBIT != 0 {
 			o1 ^= 0x010 << 12
@@ -2057,7 +2078,7 @@ func (c *ctxt5) asmout(p *obj.Prog, o *Optab, out []uint32) {
 	case 37: /* mov $con,PSR */
 		c.aclass(&p.From)
 
-		o1 = 2<<23 | 0x29f<<12 | 0<<4
+		o1 = 2<<23 | 0x2cf<<12 | 0<<4
 		if p.Scond&C_FBIT != 0 {
 			o1 ^= 0x010 << 12
 		}
@@ -2167,22 +2188,27 @@ func (c *ctxt5) asmout(p *obj.Prog, o *Optab, out []uint32) {
 		r := int(p.Reg)
 		if r == 0 {
 			r = rt
-			if p.As == AMOVF || p.As == AMOVD || p.As == AMOVFD || p.As == AMOVDF || p.As == ASQRTF || p.As == ASQRTD || p.As == AABSF || p.As == AABSD || p.As == ANEGF || p.As == ANEGD {
-				r = 0
-			}
 		}
 
 		o1 |= (uint32(rf)&15)<<0 | (uint32(r)&15)<<16 | (uint32(rt)&15)<<12
 
-	case 56: /* move to FP[CS]R */
-		o1 = ((uint32(p.Scond)&C_SCOND)^C_SCOND_XOR)<<28 | 0xe<<24 | 1<<8 | 1<<4
+	case 55: /* negf freg, freg */
+		o1 = c.oprrr(p, p.As, int(p.Scond))
 
-		o1 |= ((uint32(p.To.Reg)&1)+1)<<21 | (uint32(p.From.Reg)&15)<<12
+		rf := int(p.From.Reg)
+		rt := int(p.To.Reg)
+
+		o1 |= (uint32(rf)&15)<<0 | (uint32(rt)&15)<<12
+
+	case 56: /* move to FP[CS]R */
+		o1 = ((uint32(p.Scond)&C_SCOND)^C_SCOND_XOR)<<28 | 0xee1<<16 | 0xa1<<4
+
+		o1 |= (uint32(p.From.Reg) & 15) << 12
 
 	case 57: /* move from FP[CS]R */
-		o1 = ((uint32(p.Scond)&C_SCOND)^C_SCOND_XOR)<<28 | 0xe<<24 | 1<<8 | 1<<4
+		o1 = ((uint32(p.Scond)&C_SCOND)^C_SCOND_XOR)<<28 | 0xef1<<16 | 0xa1<<4
 
-		o1 |= ((uint32(p.From.Reg)&1)+1)<<21 | (uint32(p.To.Reg)&15)<<12 | 1<<20
+		o1 |= (uint32(p.To.Reg) & 15) << 12
 
 	case 58: /* movbu R,R */
 		o1 = c.oprrr(p, AAND, int(p.Scond))

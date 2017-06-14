@@ -329,6 +329,16 @@ func (r *Request) WithContext(ctx context.Context) *Request {
 	r2 := new(Request)
 	*r2 = *r
 	r2.ctx = ctx
+
+	// Deep copy the URL because it isn't
+	// a map and the URL is mutable by users
+	// of WithContext.
+	if r.URL != nil {
+		r2URL := new(url.URL)
+		*r2URL = *r.URL
+		r2.URL = r2URL
+	}
+
 	return r2
 }
 
@@ -337,18 +347,6 @@ func (r *Request) WithContext(ctx context.Context) *Request {
 func (r *Request) ProtoAtLeast(major, minor int) bool {
 	return r.ProtoMajor > major ||
 		r.ProtoMajor == major && r.ProtoMinor >= minor
-}
-
-// protoAtLeastOutgoing is like ProtoAtLeast, but is for outgoing
-// requests (see issue 18407) where these fields aren't supposed to
-// matter.  As a minor fix for Go 1.8, at least treat (0, 0) as
-// matching HTTP/1.1 or HTTP/1.0.  Only HTTP/1.1 is used.
-// TODO(bradfitz): ideally remove this whole method. It shouldn't be used.
-func (r *Request) protoAtLeastOutgoing(major, minor int) bool {
-	if r.ProtoMajor == 0 && r.ProtoMinor == 0 && major == 1 && minor <= 1 {
-		return true
-	}
-	return r.ProtoAtLeast(major, minor)
 }
 
 // UserAgent returns the client's User-Agent, if sent in the request.
@@ -1033,11 +1031,6 @@ type maxBytesReader struct {
 	err error         // sticky error
 }
 
-func (l *maxBytesReader) tooLarge() (n int, err error) {
-	l.err = errors.New("http: request body too large")
-	return 0, l.err
-}
-
 func (l *maxBytesReader) Read(p []byte) (n int, err error) {
 	if l.err != nil {
 		return 0, l.err
@@ -1309,7 +1302,7 @@ func (r *Request) closeBody() {
 }
 
 func (r *Request) isReplayable() bool {
-	if r.Body == nil {
+	if r.Body == nil || r.Body == NoBody || r.GetBody != nil {
 		switch valueOrDefault(r.Method, "GET") {
 		case "GET", "HEAD", "OPTIONS", "TRACE":
 			return true

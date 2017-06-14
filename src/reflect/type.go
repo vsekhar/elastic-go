@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -1515,8 +1517,23 @@ func implements(T, V *rtype) bool {
 		i := 0
 		for j := 0; j < len(v.methods); j++ {
 			tm := &t.methods[i]
+			tmName := t.nameOff(tm.name)
 			vm := &v.methods[j]
-			if V.nameOff(vm.name).name() == t.nameOff(tm.name).name() && V.typeOff(vm.typ) == t.typeOff(tm.typ) {
+			vmName := V.nameOff(vm.name)
+			if vmName.name() == tmName.name() && V.typeOff(vm.typ) == t.typeOff(tm.typ) {
+				if !tmName.isExported() {
+					tmPkgPath := tmName.pkgPath()
+					if tmPkgPath == "" {
+						tmPkgPath = t.pkgPath.name()
+					}
+					vmPkgPath := vmName.pkgPath()
+					if vmPkgPath == "" {
+						vmPkgPath = v.pkgPath.name()
+					}
+					if tmPkgPath != vmPkgPath {
+						continue
+					}
+				}
 				if i++; i >= len(t.methods) {
 					return true
 				}
@@ -1533,8 +1550,23 @@ func implements(T, V *rtype) bool {
 	vmethods := v.methods()
 	for j := 0; j < int(v.mcount); j++ {
 		tm := &t.methods[i]
+		tmName := t.nameOff(tm.name)
 		vm := vmethods[j]
-		if V.nameOff(vm.name).name() == t.nameOff(tm.name).name() && V.typeOff(vm.mtyp) == t.typeOff(tm.typ) {
+		vmName := V.nameOff(vm.name)
+		if vmName.name() == tmName.name() && V.typeOff(vm.mtyp) == t.typeOff(tm.typ) {
+			if !tmName.isExported() {
+				tmPkgPath := tmName.pkgPath()
+				if tmPkgPath == "" {
+					tmPkgPath = t.pkgPath.name()
+				}
+				vmPkgPath := vmName.pkgPath()
+				if vmPkgPath == "" {
+					vmPkgPath = V.nameOff(v.pkgPath).name()
+				}
+				if tmPkgPath != vmPkgPath {
+					continue
+				}
+			}
 			if i++; i >= len(t.methods) {
 				return true
 			}
@@ -2314,6 +2346,31 @@ type structTypeFixed32 struct {
 	m [32]method
 }
 
+// isLetter returns true if a given 'rune' is classified as a Letter.
+func isLetter(ch rune) bool {
+	return 'a' <= ch && ch <= 'z' || 'A' <= ch && ch <= 'Z' || ch == '_' || ch >= utf8.RuneSelf && unicode.IsLetter(ch)
+}
+
+// isValidFieldName checks if a string is a valid (struct) field name or not.
+//
+// According to the language spec, a field name should be an identifier.
+//
+// identifier = letter { letter | unicode_digit } .
+// letter = unicode_letter | "_" .
+func isValidFieldName(fieldName string) bool {
+	for i, c := range fieldName {
+		if i == 0 && !isLetter(c) {
+			return false
+		}
+
+		if !(isLetter(c) || unicode.IsDigit(c)) {
+			return false
+		}
+	}
+
+	return len(fieldName) > 0
+}
+
 // StructOf returns the struct type containing fields.
 // The Offset and Index fields are ignored and computed as they would be
 // by the compiler.
@@ -2342,6 +2399,9 @@ func StructOf(fields []StructField) Type {
 	for i, field := range fields {
 		if field.Name == "" {
 			panic("reflect.StructOf: field " + strconv.Itoa(i) + " has no name")
+		}
+		if !isValidFieldName(field.Name) {
+			panic("reflect.StructOf: field " + strconv.Itoa(i) + " has invalid name")
 		}
 		if field.Type == nil {
 			panic("reflect.StructOf: field " + strconv.Itoa(i) + " has no type")

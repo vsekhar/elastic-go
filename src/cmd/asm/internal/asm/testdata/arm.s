@@ -963,9 +963,13 @@ jmp_label_3:
 
 // MUL
 	MUL	R2, R3, R4           // 930204e0
+	MUL	R2, R4               // 920404e0
 	MUL.S	R2, R3, R4           // 930214e0
+	MUL.S	R2, R4               // 920414e0
 	MULU	R5, R6, R7           // 960507e0
+	MULU	R5, R7               // 950707e0
 	MULU.S	R5, R6, R7           // 960517e0
+	MULU.S	R5, R7               // 950717e0
 	MULLU	R1, R2, (R4, R3)     // 923184e0
 	MULLU.S	R1, R2, (R4, R3)     // 923194e0
 	MULL	R1, R2, (R4, R3)     // 9231c4e0
@@ -1002,6 +1006,220 @@ jmp_label_3:
 	SWI	$0             // 000000ef
 	SWI	$65535         // ffff00ef
 	SWI	               // 000000ef
+
+// synthetic arithmatic
+	ADD	$0xffffffaa, R2, R3 // ADD $4294967210, R2, R3   // 55b0e0e30b3082e0
+	ADD	$0xffffff55, R5     // ADD $4294967125, R5       // aab0e0e30b5085e0
+	ADD.S	$0xffffffab, R2, R3 // ADD.S $4294967211, R2, R3 // 54b0e0e30b3092e0
+	ADD.S	$0xffffff54, R5     // ADD.S $4294967124, R5     // abb0e0e30b5095e0
+	ADC	$0xffffffac, R2, R3 // ADC $4294967212, R2, R3   // 53b0e0e30b30a2e0
+	ADC	$0xffffff53, R5     // ADC $4294967123, R5       // acb0e0e30b50a5e0
+	ADC.S	$0xffffffad, R2, R3 // ADC.S $4294967213, R2, R3 // 52b0e0e30b30b2e0
+	ADC.S	$0xffffff52, R5     // ADC.S $4294967122, R5     // adb0e0e30b50b5e0
+	SUB	$0xffffffae, R2, R3 // SUB $4294967214, R2, R3   // 51b0e0e30b3042e0
+	SUB	$0xffffff51, R5     // SUB $4294967121, R5       // aeb0e0e30b5045e0
+	SUB.S	$0xffffffaf, R2, R3 // SUB.S $4294967215, R2, R3 // 50b0e0e30b3052e0
+	SUB.S	$0xffffff50, R5     // SUB.S $4294967120, R5     // afb0e0e30b5055e0
+	SBC	$0xffffffb0, R2, R3 // SBC $4294967216, R2, R3   // 4fb0e0e30b30c2e0
+	SBC	$0xffffff4f, R5     // SBC $4294967119, R5       // b0b0e0e30b50c5e0
+	SBC.S	$0xffffffb1, R2, R3 // SBC.S $4294967217, R2, R3 // 4eb0e0e30b30d2e0
+	SBC.S	$0xffffff4e, R5     // SBC.S $4294967118, R5     // b1b0e0e30b50d5e0
+	RSB	$0xffffffb2, R2, R3 // RSB $4294967218, R2, R3   // 4db0e0e30b3062e0
+	RSB	$0xffffff4d, R5     // RSB $4294967117, R5       // b2b0e0e30b5065e0
+	RSB.S	$0xffffffb3, R2, R3 // RSB.S $4294967219, R2, R3 // 4cb0e0e30b3072e0
+	RSB.S	$0xffffff4c, R5     // RSB.S $4294967116, R5     // b3b0e0e30b5075e0
+	RSC	$0xffffffb4, R2, R3 // RSC $4294967220, R2, R3   // 4bb0e0e30b30e2e0
+	RSC	$0xffffff4b, R5     // RSC $4294967115, R5       // b4b0e0e30b50e5e0
+	RSC.S	$0xffffffb5, R2, R3 // RSC.S $4294967221, R2, R3 // 4ab0e0e30b30f2e0
+	RSC.S	$0xffffff4a, R5     // RSC.S $4294967114, R5     // b5b0e0e30b50f5e0
+	AND	$0xffffffaa, R2, R3 // AND $4294967210, R2, R3   // 55b0e0e30b3002e0
+	AND	$0xffffff55, R5     // AND $4294967125, R5       // aab0e0e30b5005e0
+	AND.S	$0xffffffab, R2, R3 // AND.S $4294967211, R2, R3 // 54b0e0e30b3012e0
+	AND.S	$0xffffff54, R5     // AND.S $4294967124, R5     // abb0e0e30b5015e0
+	ORR	$0xffffffaa, R2, R3 // ORR $4294967210, R2, R3   // 55b0e0e30b3082e1
+	ORR	$0xffffff55, R5     // ORR $4294967125, R5       // aab0e0e30b5085e1
+	ORR.S	$0xffffffab, R2, R3 // ORR.S $4294967211, R2, R3 // 54b0e0e30b3092e1
+	ORR.S	$0xffffff54, R5     // ORR.S $4294967124, R5     // abb0e0e30b5095e1
+	EOR	$0xffffffaa, R2, R3 // EOR $4294967210, R2, R3   // 55b0e0e30b3022e0
+	EOR	$0xffffff55, R5     // EOR $4294967125, R5       // aab0e0e30b5025e0
+	EOR.S	$0xffffffab, R2, R3 // EOR.S $4294967211, R2, R3 // 54b0e0e30b3032e0
+	EOR.S	$0xffffff54, R5     // EOR.S $4294967124, R5     // abb0e0e30b5035e0
+	BIC	$0xffffffaa, R2, R3 // BIC $4294967210, R2, R3   // 55b0e0e30b30c2e1
+	BIC	$0xffffff55, R5     // BIC $4294967125, R5       // aab0e0e30b50c5e1
+	BIC.S	$0xffffffab, R2, R3 // BIC.S $4294967211, R2, R3 // 54b0e0e30b30d2e1
+	BIC.S	$0xffffff54, R5     // BIC.S $4294967124, R5     // abb0e0e30b50d5e1
+	CMP	$0xffffffab, R2     // CMP $4294967211, R2       // 54b0e0e30b0052e1
+	CMN	$0xffffffac, R3     // CMN $4294967212, R3       // 53b0e0e30b0073e1
+	TST	$0xffffffad, R4     // TST $4294967213, R4       // 52b0e0e30b0014e1
+	TEQ	$0xffffffae, R5     // TEQ $4294967214, R5       // 51b0e0e30b0035e1
+
+// immediate decomposition
+	ADD	$0xff0000ff, R0, R1 // ADD $4278190335, R0, R1 // ff1080e2ff1481e2
+	EOR	$0xff0000ff, R0, R1 // EOR $4278190335, R0, R1 // ff1020e2ff1421e2
+	ORR	$0xff0000ff, R0, R1 // ORR $4278190335, R0, R1 // ff1080e3ff1481e3
+	SUB	$0xff0000ff, R0, R1 // SUB $4278190335, R0, R1 // ff1040e2ff1441e2
+	BIC	$0xff0000ff, R0, R1 // BIC $4278190335, R0, R1 // ff10c0e3ff14c1e3
+	RSB	$0xff0000ff, R0, R1 // RSB $4278190335, R0, R1 // ff1060e2ff1481e2
+	ADC	$0xff0000ff, R0, R1 // ADC $4278190335, R0, R1 // ff10a0e2ff1481e2
+	SBC	$0xff0000ff, R0, R1 // SBC $4278190335, R0, R1 // ff10c0e2ff1441e2
+	RSC	$0xff0000ff, R0, R1 // RSC $4278190335, R0, R1 // ff10e0e2ff1481e2
+	ADD	$0x000fffff, R0, R1 // ADD $1048575, R0, R1    // 011680e2011041e2
+	ADC	$0x000fffff, R0, R1 // ADC $1048575, R0, R1    // 0116a0e2011041e2
+	SUB	$0x000fffff, R0, R1 // SUB $1048575, R0, R1    // 011640e2011081e2
+	SBC	$0x000fffff, R0, R1 // SBC $1048575, R0, R1    // 0116c0e2011081e2
+	RSB	$0x000fffff, R0, R1 // RSB $1048575, R0, R1    // 011660e2011041e2
+	RSC	$0x000fffff, R0, R1 // RSC $1048575, R0, R1    // 0116e0e2011041e2
+	ADD	$0xff0000ff, R1     // ADD $4278190335, R1     // ff1081e2ff1481e2
+	EOR	$0xff0000ff, R1     // EOR $4278190335, R1     // ff1021e2ff1421e2
+	ORR	$0xff0000ff, R1     // ORR $4278190335, R1     // ff1081e3ff1481e3
+	SUB	$0xff0000ff, R1     // SUB $4278190335, R1     // ff1041e2ff1441e2
+	BIC	$0xff0000ff, R1     // BIC $4278190335, R1     // ff10c1e3ff14c1e3
+	RSB	$0xff0000ff, R1     // RSB $4278190335, R1     // ff1061e2ff1481e2
+	ADC	$0xff0000ff, R1     // ADC $4278190335, R1     // ff10a1e2ff1481e2
+	SBC	$0xff0000ff, R1     // SBC $4278190335, R1     // ff10c1e2ff1441e2
+	RSC	$0xff0000ff, R1     // RSC $4278190335, R1     // ff10e1e2ff1481e2
+	ADD	$0x000fffff, R1     // ADD $1048575, R1        // 011681e2011041e2
+	ADC	$0x000fffff, R1     // ADC $1048575, R1        // 0116a1e2011041e2
+	SUB	$0x000fffff, R1     // SUB $1048575, R1        // 011641e2011081e2
+	SBC	$0x000fffff, R1     // SBC $1048575, R1        // 0116c1e2011081e2
+	RSB	$0x000fffff, R1     // RSB $1048575, R1        // 011661e2011041e2
+	RSC	$0x000fffff, R1     // RSC $1048575, R1        // 0116e1e2011041e2
+
+// MVN
+	MVN	$0xff, R1        // MVN $255, R1          // ff10e0e3
+	MVN	$0xff000000, R1  // MVN $4278190080, R1   // ff14e0e3
+	MVN.S	$0xff, R1        // MVN.S $255, R1        // ff10f0e3
+	MVN.S	$0xff000000, R1  // MVN.S $4278190080, R1 // ff14f0e3
+	MVN	R9<<30, R7       // 097fe0e1
+	MVN	R9>>30, R7       // 297fe0e1
+	MVN	R9->30, R7       // 497fe0e1
+	MVN	R9@>30, R7       // 697fe0e1
+	MVN.S	R9<<30, R7       // 097ff0e1
+	MVN.S	R9>>30, R7       // 297ff0e1
+	MVN.S	R9->30, R7       // 497ff0e1
+	MVN.S	R9@>30, R7       // 697ff0e1
+	MVN	R9<<R8, R7       // 1978e0e1
+	MVN	R9>>R8, R7       // 3978e0e1
+	MVN	R9->R8, R7       // 5978e0e1
+	MVN	R9@>R8, R7       // 7978e0e1
+	MVN.S	R9<<R8, R7       // 1978f0e1
+	MVN.S	R9>>R8, R7       // 3978f0e1
+	MVN.S	R9->R8, R7       // 5978f0e1
+	MVN.S	R9@>R8, R7       // 7978f0e1
+	MVN	$0xffffffae, R5  // MVN $4294967214, R5   // 51b0e0e30b50e0e1
+	MVN.S	$0xffffffae, R5  // MVN.S $4294967214, R5 // 51b0e0e30b50f0e1
+
+// MOVM
+	MOVM.IA   [R0,R2,R4,R6], (R1)        // MOVM.U [R0,R2,R4,R6], (R1)                      // 550081e8
+	MOVM.IA   [R0-R4,R6,R8,R9-R11], (R1) // MOVM.U [R0,R1,R2,R3,R4,R6,R8,R9,g,R11], (R1)    // 5f0f81e8
+	MOVM.IA.W [R0,R2,R4,R6], (R1)        // MOVM.W.U [R0,R2,R4,R6], (R1)                    // 5500a1e8
+	MOVM.IA.W [R0-R4,R6,R8,R9-R11], (R1) // MOVM.W.U [R0,R1,R2,R3,R4,R6,R8,R9,g,R11], (R1)  // 5f0fa1e8
+	MOVM.IA   (R1), [R0,R2,R4,R6]        // MOVM.U (R1), [R0,R2,R4,R6]                      // 550091e8
+	MOVM.IA   (R1), [R0-R4,R6,R8,R9-R11] // MOVM.U (R1), [R0,R1,R2,R3,R4,R6,R8,R9,g,R11]    // 5f0f91e8
+	MOVM.IA.W (R1), [R0,R2,R4,R6]        // MOVM.W.U (R1), [R0,R2,R4,R6]                    // 5500b1e8
+	MOVM.IA.W (R1), [R0-R4,R6,R8,R9-R11] // MOVM.W.U (R1), [R0,R1,R2,R3,R4,R6,R8,R9,g,R11]  // 5f0fb1e8
+	MOVM.DA   [R0,R2,R4,R6], (R1)        // MOVM [R0,R2,R4,R6], (R1)                        // 550001e8
+	MOVM.DA   [R0-R4,R6,R8,R9-R11], (R1) // MOVM [R0,R1,R2,R3,R4,R6,R8,R9,g,R11], (R1)      // 5f0f01e8
+	MOVM.DA.W [R0,R2,R4,R6], (R1)        // MOVM.W [R0,R2,R4,R6], (R1)                      // 550021e8
+	MOVM.DA.W [R0-R4,R6,R8,R9-R11], (R1) // MOVM.W [R0,R1,R2,R3,R4,R6,R8,R9,g,R11], (R1)    // 5f0f21e8
+	MOVM.DA   (R1), [R0,R2,R4,R6]        // MOVM (R1), [R0,R2,R4,R6]                        // 550011e8
+	MOVM.DA   (R1), [R0-R4,R6,R8,R9-R11] // MOVM (R1), [R0,R1,R2,R3,R4,R6,R8,R9,g,R11]      // 5f0f11e8
+	MOVM.DA.W (R1), [R0,R2,R4,R6]        // MOVM.W (R1), [R0,R2,R4,R6]                      // 550031e8
+	MOVM.DA.W (R1), [R0-R4,R6,R8,R9-R11] // MOVM.W (R1), [R0,R1,R2,R3,R4,R6,R8,R9,g,R11]    // 5f0f31e8
+	MOVM.DB   [R0,R2,R4,R6], (R1)        // MOVM.P [R0,R2,R4,R6], (R1)                      // 550001e9
+	MOVM.DB   [R0-R4,R6,R8,R9-R11], (R1) // MOVM.P [R0,R1,R2,R3,R4,R6,R8,R9,g,R11], (R1)    // 5f0f01e9
+	MOVM.DB.W [R0,R2,R4,R6], (R1)        // MOVM.P.W [R0,R2,R4,R6], (R1)                    // 550021e9
+	MOVM.DB.W [R0-R4,R6,R8,R9-R11], (R1) // MOVM.P.W [R0,R1,R2,R3,R4,R6,R8,R9,g,R11], (R1)  // 5f0f21e9
+	MOVM.DB   (R1), [R0,R2,R4,R6]        // MOVM.P (R1), [R0,R2,R4,R6]                      // 550011e9
+	MOVM.DB   (R1), [R0-R4,R6,R8,R9-R11] // MOVM.P (R1), [R0,R1,R2,R3,R4,R6,R8,R9,g,R11]    // 5f0f11e9
+	MOVM.DB.W (R1), [R0,R2,R4,R6]        // MOVM.P.W (R1), [R0,R2,R4,R6]                    // 550031e9
+	MOVM.DB.W (R1), [R0-R4,R6,R8,R9-R11] // MOVM.P.W (R1), [R0,R1,R2,R3,R4,R6,R8,R9,g,R11]  // 5f0f31e9
+	MOVM.IB   [R0,R2,R4,R6], (g)         // MOVM.P.U [R0,R2,R4,R6], (g)                     // 55008ae9
+	MOVM.IB   [R0-R4,R6,R8,R9-R11], (g)  // MOVM.P.U [R0,R1,R2,R3,R4,R6,R8,R9,g,R11], (g)   // 5f0f8ae9
+	MOVM.IB.W [R0,R2,R4,R6], (g)         // MOVM.P.W.U [R0,R2,R4,R6], (g)                   // 5500aae9
+	MOVM.IB.W [R0-R4,R6,R8,R9-R11], (g)  // MOVM.P.W.U [R0,R1,R2,R3,R4,R6,R8,R9,g,R11], (g) // 5f0faae9
+	MOVM.IB   (g), [R0,R2,R4,R6]         // MOVM.P.U (g), [R0,R2,R4,R6]                     // 55009ae9
+	MOVM.IB   (g), [R0-R4,R6,R8,R9-R11]  // MOVM.P.U (g), [R0,R1,R2,R3,R4,R6,R8,R9,g,R11]   // 5f0f9ae9
+	MOVM.IB.W (g), [R0,R2,R4,R6]         // MOVM.P.W.U (g), [R0,R2,R4,R6]                   // 5500bae9
+	MOVM.IB.W (g), [R0-R4,R6,R8,R9-R11]  // MOVM.P.W.U (g), [R0,R1,R2,R3,R4,R6,R8,R9,g,R11] // 5f0fbae9
+
+// MOVW
+mov_label_0:
+	MOVW	R3, R4                                            // 0340a0e1
+	MOVW	R9, R2                                            // 0920a0e1
+	MOVW	$0xff, R9            // MOVW $255, R9             // ff90a0e3
+	MOVW	$0xff000000, R9      // MOVW $4278190080, R9      // ff94a0e3
+	MOVW	$0xff(R0), R1        // MOVW $255(R0), R1         // ff1080e2
+	MOVW	$-0xff(R0), R1       // MOVW $-255(R0), R1        // ff1040e2
+	MOVW	$0xffffffae, R1      // MOVW $4294967214, R1      // 5110e0e3
+	MOVW	$0xaaaaaaaa, R1      // MOVW $2863311530, R1
+	MOVW	$mov_label_0(SB), R2
+	MOVW	R1, (R2)                                          // 001082e5
+	MOVW.P	R1, (R2)                                          // 001082e4
+	MOVW.W	R1, (R2)                                          // 0010a2e5
+	MOVW	R1, 0x20(R2)         // MOVW R1, 32(R2)           // 201082e5
+	MOVW.P	R1, 0x20(R2)         // MOVW.P R1, 32(R2)         // 201082e4
+	MOVW.W	R1, 0x20(R2)         // MOVW.W R1, 32(R2)         // 2010a2e5
+	MOVW	R1, -0x20(R2)        // MOVW R1, -32(R2)          // 201002e5
+	MOVW.P	R1, -0x20(R2)        // MOVW.P R1, -32(R2)        // 201002e4
+	MOVW.W	R1, -0x20(R2)        // MOVW.W R1, -32(R2)        // 201022e5
+	MOVW	R1, mov_label_0(SB)
+	MOVW	(R2), R1                                          // 001092e5
+	MOVW.P	(R2), R1                                          // 001092e4
+	MOVW.W	(R2), R1                                          // 0010b2e5
+	MOVW	0x20(R2), R1         // MOVW 32(R2), R1           // 201092e5
+	MOVW.P	0x20(R2), R1         // MOVW.P 32(R2), R1         // 201092e4
+	MOVW.W	0x20(R2), R1         // MOVW.W 32(R2), R1         // 2010b2e5
+	MOVW	-0x20(R2), R1        // MOVW -32(R2), R1          // 201012e5
+	MOVW.P	-0x20(R2), R1        // MOVW.P -32(R2), R1        // 201012e4
+	MOVW.W	-0x20(R2), R1        // MOVW.W -32(R2), R1        // 201032e5
+	MOVW	mov_label_0(SB), R1
+	MOVW	R1, 0x00ffffff(R2)   // MOVW R1, 16777215(R2)
+	MOVW	R1, foo(SB)
+	MOVW	0x00ffffff(R2), R1   // MOVW 16777215(R2), R1
+	MOVW	foo(SB), R1
+	MOVW	CPSR, R1                                          // 00100fe1
+	MOVW	R1, CPSR                                          // 01f02ce1
+	MOVW	$0xff, CPSR          // MOVW $255, CPSR           // fff02ce3
+	MOVW	$0xff000000, CPSR    // MOVW $4278190080, CPSR    // fff42ce3
+	MOVW	FPSR, R9                                          // 109af1ee
+	MOVW	FPSR, g                                           // 10aaf1ee
+	MOVW	R9, FPSR                                          // 109ae1ee
+	MOVW	g, FPSR                                           // 10aae1ee
+	MOVW	R0>>28(R1), R2                                    // 202e91e7
+	MOVW	R0<<28(R1), R2                                    // 002e91e7
+	MOVW	R0->28(R1), R2                                    // 402e91e7
+	MOVW	R0@>28(R1), R2                                    // 602e91e7
+	MOVW.U	R0>>28(R1), R2                                    // 202e11e7
+	MOVW.U	R0<<28(R1), R2                                    // 002e11e7
+	MOVW.U	R0->28(R1), R2                                    // 402e11e7
+	MOVW.U	R0@>28(R1), R2                                    // 602e11e7
+	MOVW.W	R0>>28(R1), R2                                    // 202eb1e7
+	MOVW.W	R0<<28(R1), R2                                    // 002eb1e7
+	MOVW.W	R0->28(R1), R2                                    // 402eb1e7
+	MOVW.W	R0@>28(R1), R2                                    // 602eb1e7
+	MOVW.P	R0>>28(g), R2                                     // 202e9ae6
+	MOVW.P	R0<<28(g), R2                                     // 002e9ae6
+	MOVW.P	R0->28(g), R2                                     // 402e9ae6
+	MOVW.P	R0@>28(g), R2                                     // 602e9ae6
+	MOVW	R2, R0>>28(R1)                                    // 202e81e7
+	MOVW	R2, R0<<28(R1)                                    // 002e81e7
+	MOVW	R2, R0->28(R1)                                    // 402e81e7
+	MOVW	R2, R0@>28(R1)                                    // 602e81e7
+	MOVW.U	R2, R0>>28(R1)                                    // 202e01e7
+	MOVW.U	R2, R0<<28(R1)                                    // 002e01e7
+	MOVW.U	R2, R0->28(R1)                                    // 402e01e7
+	MOVW.U	R2, R0@>28(R1)                                    // 602e01e7
+	MOVW.W	R2, R0>>28(R1)                                    // 202ea1e7
+	MOVW.W	R2, R0<<28(R1)                                    // 002ea1e7
+	MOVW.W	R2, R0->28(R1)                                    // 402ea1e7
+	MOVW.W	R2, R0@>28(R1)                                    // 602ea1e7
+	MOVW.P	R2, R0>>28(R5)                                    // 202e85e6
+	MOVW.P	R2, R0<<28(R5)                                    // 002e85e6
+	MOVW.P	R2, R0->28(R5)                                    // 402e85e6
+	MOVW.P	R2, R0@>28(R5)                                    // 602e85e6
+	MOVW	R0, math·Exp(SB)     // MOVW R0, math.Exp(SB)
+	MOVW	math·Exp(SB), R0     // MOVW math.Exp(SB), R0
 
 //
 // END

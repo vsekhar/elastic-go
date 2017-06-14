@@ -1357,6 +1357,59 @@ func TestTLSServer(t *testing.T) {
 	})
 }
 
+func TestServeTLS(t *testing.T) {
+	// Not parallel: uses global test hooks.
+	defer afterTest(t)
+	defer SetTestHookServerServe(nil)
+
+	cert, err := tls.X509KeyPair(internal.LocalhostCert, internal.LocalhostKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlsConf := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
+
+	ln := newLocalListener(t)
+	defer ln.Close()
+	addr := ln.Addr().String()
+
+	serving := make(chan bool, 1)
+	SetTestHookServerServe(func(s *Server, ln net.Listener) {
+		serving <- true
+	})
+	handler := HandlerFunc(func(w ResponseWriter, r *Request) {})
+	s := &Server{
+		Addr:      addr,
+		TLSConfig: tlsConf,
+		Handler:   handler,
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- s.ServeTLS(ln, "", "") }()
+	select {
+	case err := <-errc:
+		t.Fatalf("ServeTLS: %v", err)
+	case <-serving:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout")
+	}
+
+	c, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{
+		InsecureSkipVerify: true,
+		NextProtos:         []string{"h2", "http/1.1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if got, want := c.ConnectionState().NegotiatedProtocol, "h2"; got != want {
+		t.Errorf("NegotiatedProtocol = %q; want %q", got, want)
+	}
+	if got, want := c.ConnectionState().NegotiatedProtocolIsMutual, true; got != want {
+		t.Errorf("NegotiatedProtocolIsMutual = %v; want %v", got, want)
+	}
+}
+
 // Issue 15908
 func TestAutomaticHTTP2_Serve_NoTLSConfig(t *testing.T) {
 	testAutomaticHTTP2_Serve(t, nil, true)
@@ -4358,6 +4411,9 @@ func TestServerValidatesHostHeader(t *testing.T) {
 		// Make an exception for HTTP upgrade requests:
 		{"PRI * HTTP/2.0", "", 200},
 
+		// Also an exception for CONNECT requests: (Issue 18215)
+		{"CONNECT golang.org:443 HTTP/1.1", "", 200},
+
 		// But not other HTTP/2 stuff:
 		{"PRI / HTTP/2.0", "", 400},
 		{"GET / HTTP/2.0", "", 400},
@@ -5545,48 +5601,6 @@ func TestServerValidatesMethod(t *testing.T) {
 		}
 		if res.StatusCode != tt.want {
 			t.Errorf("For %s, Status = %d; want %d", tt.method, res.StatusCode, tt.want)
-		}
-	}
-}
-
-// Test that the special cased "/route" redirect
-// implicitly created by a registered "/route/"
-// properly sets the query string in the redirect URL.
-// See Issue 17841.
-func TestServeWithSlashRedirectKeepsQueryString(t *testing.T) {
-	setParallel(t)
-	defer afterTest(t)
-
-	writeBackQuery := func(w ResponseWriter, r *Request) {
-		fmt.Fprintf(w, "%s", r.URL.RawQuery)
-	}
-
-	mux := NewServeMux()
-	mux.HandleFunc("/testOne", writeBackQuery)
-	mux.HandleFunc("/testTwo/", writeBackQuery)
-
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	tests := [...]struct {
-		path string
-		want string
-	}{
-		0: {"/testOne?this=that", "this=that"},
-		1: {"/testTwo?foo=bar", "foo=bar"},
-		2: {"/testTwo?a=1&b=2&a=3", "a=1&b=2&a=3"},
-		3: {"/testTwo?", ""},
-	}
-
-	for i, tt := range tests {
-		res, err := ts.Client().Get(ts.URL + tt.path)
-		if err != nil {
-			continue
-		}
-		slurp, _ := ioutil.ReadAll(res.Body)
-		res.Body.Close()
-		if got, want := string(slurp), tt.want; got != want {
-			t.Errorf("#%d: got = %q; want = %q", i, got, want)
 		}
 	}
 }
