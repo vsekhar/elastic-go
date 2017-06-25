@@ -30,7 +30,7 @@ func TestAllPackages(t *testing.T) {
 		t.Errorf("Found only %d packages, want at least %d", len(all), wantAtLeast)
 	}
 
-	for _, want := range []string{"fmt", "crypto/sha256", "golang.org/x/tools/go/buildutil"} {
+	for _, want := range []string{"fmt", "crypto/sha256"} {
 		if !set[want] {
 			t.Errorf("Package %q not found; got %s", want, all)
 		}
