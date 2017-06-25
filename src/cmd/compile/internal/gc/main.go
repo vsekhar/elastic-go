@@ -915,7 +915,7 @@ func importfile(f *Val) *types.Pkg {
 		return nil
 	}
 
-	if isbadimport(path_) {
+	if isbadimport(path_, false) {
 		return nil
 	}
 
@@ -959,7 +959,7 @@ func importfile(f *Val) *types.Pkg {
 		}
 		path_ = path.Join(prefix, path_)
 
-		if isbadimport(path_) {
+		if isbadimport(path_, true) {
 			return nil
 		}
 	}
@@ -988,7 +988,8 @@ func importfile(f *Val) *types.Pkg {
 	// check object header
 	p, err := imp.ReadString('\n')
 	if err != nil {
-		log.Fatalf("reading input: %v", err)
+		yyerror("import %s: reading input: %v", file, err)
+		errorexit()
 	}
 	if len(p) > 0 {
 		p = p[:len(p)-1]
@@ -1003,7 +1004,8 @@ func importfile(f *Val) *types.Pkg {
 		}
 		p, err = imp.ReadString('\n')
 		if err != nil {
-			log.Fatalf("reading input: %v", err)
+			yyerror("import %s: reading input: %v", file, err)
+			errorexit()
 		}
 		if len(p) > 0 {
 			p = p[:len(p)-1]
@@ -1028,7 +1030,8 @@ func importfile(f *Val) *types.Pkg {
 	for {
 		p, err = imp.ReadString('\n')
 		if err != nil {
-			log.Fatalf("reading input: %v", err)
+			yyerror("import %s: reading input: %v", file, err)
+			errorexit()
 		}
 		if p == "\n" {
 			break // header ends with blank line

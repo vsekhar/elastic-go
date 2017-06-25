@@ -48,6 +48,9 @@ import (
 	"golang_org/x/net/lex/httplex"
 )
 
+// A list of the possible cipher suite ids. Taken from
+// http://www.iana.org/assignments/tls-parameters/tls-parameters.txt
+
 const (
 	http2cipher_TLS_NULL_WITH_NULL_NULL               uint16 = 0x0000
 	http2cipher_TLS_RSA_WITH_NULL_MD5                 uint16 = 0x0001
@@ -1206,11 +1209,16 @@ type http2goAwayFlowError struct{}
 
 func (http2goAwayFlowError) Error() string { return "connection exceeded flow control window size" }
 
+// connError represents an HTTP/2 ConnectionError error code, along
+// with a string (for debugging) explaining why.
+//
 // Errors of this type are only returned by the frame parser functions
-// and converted into ConnectionError(ErrCodeProtocol).
+// and converted into ConnectionError(Code), after stashing away
+// the Reason into the Framer's errDetail field, accessible via
+// the (*Framer).ErrorDetail method.
 type http2connError struct {
-	Code   http2ErrCode
-	Reason string
+	Code   http2ErrCode // the ConnectionError error code
+	Reason string       // additional reason
 }
 
 func (e http2connError) Error() string {
@@ -2988,6 +2996,8 @@ func http2reqBodyIsNoBody(body io.ReadCloser) bool {
 	return body == NoBody
 }
 
+func http2go18httpNoBody() io.ReadCloser { return NoBody } // for tests only
+
 func http2configureServer19(s *Server, conf *http2Server) error {
 	s.RegisterOnShutdown(conf.state.startGracefulShutdown)
 	return nil
@@ -3562,14 +3572,18 @@ func (s *http2sorter) SortStrings(ss []string) {
 // validPseudoPath reports whether v is a valid :path pseudo-header
 // value. It must be either:
 //
-//     *) a non-empty string starting with '/', but not with with "//",
+//     *) a non-empty string starting with '/'
 //     *) the string '*', for OPTIONS requests.
 //
 // For now this is only used a quick check for deciding when to clean
 // up Opaque URLs before sending requests from the Transport.
 // See golang.org/issue/16847
+//
+// We used to enforce that the path also didn't start with "//", but
+// Google's GFE accepts such paths and Chrome sends them, so ignore
+// that part of the spec. See golang.org/issue/19103.
 func http2validPseudoPath(v string) bool {
-	return (len(v) > 0 && v[0] == '/' && (len(v) == 1 || v[1] != '/')) || v == "*"
+	return (len(v) > 0 && v[0] == '/') || v == "*"
 }
 
 // pipe is a goroutine-safe io.Reader/io.Writer pair. It's like
@@ -5932,6 +5946,7 @@ type http2responseWriterState struct {
 	wroteHeader   bool     // WriteHeader called (explicitly or implicitly). Not necessarily sent to user yet.
 	sentHeader    bool     // have we sent the header frame?
 	handlerDone   bool     // handler has finished
+	dirty         bool     // a Write failed; don't reuse this responseWriterState
 
 	sentContentLen int64 // non-zero if handler set a Content-Length header
 	wroteBytes     int64
@@ -6013,6 +6028,7 @@ func (rws *http2responseWriterState) writeChunk(p []byte) (n int, err error) {
 			date:          date,
 		})
 		if err != nil {
+			rws.dirty = true
 			return 0, err
 		}
 		if endStream {
@@ -6034,6 +6050,7 @@ func (rws *http2responseWriterState) writeChunk(p []byte) (n int, err error) {
 	if len(p) > 0 || endStream {
 		// only send a 0 byte DATA frame if we're ending the stream.
 		if err := rws.conn.writeDataFromHandler(rws.stream, p, endStream); err != nil {
+			rws.dirty = true
 			return 0, err
 		}
 	}
@@ -6045,6 +6062,9 @@ func (rws *http2responseWriterState) writeChunk(p []byte) (n int, err error) {
 			trailers:  rws.trailers,
 			endStream: true,
 		})
+		if err != nil {
+			rws.dirty = true
+		}
 		return len(p), err
 	}
 	return len(p), nil
@@ -6184,7 +6204,7 @@ func http2cloneHeader(h Header) Header {
 //
 // * Handler calls w.Write or w.WriteString ->
 // * -> rws.bw (*bufio.Writer) ->
-// * (Handler migth call Flush)
+// * (Handler might call Flush)
 // * -> chunkWriter{rws}
 // * -> responseWriterState.writeChunk(p []byte)
 // * -> responseWriterState.writeChunk (most of the magic; see comment there)
@@ -6223,10 +6243,19 @@ func (w *http2responseWriter) write(lenData int, dataB []byte, dataS string) (n 
 
 func (w *http2responseWriter) handlerDone() {
 	rws := w.rws
+	dirty := rws.dirty
 	rws.handlerDone = true
 	w.Flush()
 	w.rws = nil
-	http2responseWriterStatePool.Put(rws)
+	if !dirty {
+		// Only recycle the pool if all prior Write calls to
+		// the serverConn goroutine completed successfully. If
+		// they returned earlier due to resets from the peer
+		// there might still be write goroutines outstanding
+		// from the serverConn referencing the rws memory. See
+		// issue 20704.
+		http2responseWriterStatePool.Put(rws)
+	}
 }
 
 // Push errors.
@@ -7184,7 +7213,7 @@ func http2checkConnHeaders(req *Request) error {
 // req.ContentLength, where 0 actually means zero (not unknown) and -1
 // means unknown.
 func http2actualContentLength(req *Request) int64 {
-	if req.Body == nil {
+	if req.Body == nil || http2reqBodyIsNoBody(req.Body) {
 		return 0
 	}
 	if req.ContentLength != 0 {
@@ -7215,8 +7244,8 @@ func (cc *http2ClientConn) RoundTrip(req *Request) (*Response, error) {
 	}
 
 	body := req.Body
-	hasBody := body != nil
 	contentLen := http2actualContentLength(req)
+	hasBody := contentLen != 0
 
 	// TODO(bradfitz): this is a copy of the logic in net/http. Unify somewhere?
 	var requestedGzip bool
@@ -8694,7 +8723,7 @@ func (p *http2writeGoAway) writeFrame(ctx http2writeContext) error {
 	return err
 }
 
-func (*http2writeGoAway) staysWithinBuffer(max int) bool { return false }
+func (*http2writeGoAway) staysWithinBuffer(max int) bool { return false } // flushes
 
 type http2writeData struct {
 	streamID  uint32
@@ -9205,7 +9234,7 @@ func (p *http2writeQueuePool) get() *http2writeQueue {
 }
 
 // RFC 7540, Section 5.3.5: the default weight is 16.
-const http2priorityDefaultWeight = 15
+const http2priorityDefaultWeight = 15 // 16 = 15 + 1
 
 // PriorityWriteSchedulerConfig configures a priorityWriteScheduler.
 type http2PriorityWriteSchedulerConfig struct {
