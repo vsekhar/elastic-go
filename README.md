@@ -1,3 +1,16 @@
+# Elastic Go
+
+Elastic Go is a fork of the Go programming language that supports building
+binaries that utilize a remote API for runtime services (memory, scheduling,
+etc.). This is a first step to running binaries on cloud infrastructure in a way
+that scales automatically as required.
+
+The project is active but not yet functional.
+
+The upstream README follows.
+
+---
+
 # The Go Programming Language
 
 Go is an open source programming language that makes it easy to build simple,
