@@ -150,6 +150,8 @@ func escapesRemote() {
 		return
 	}
 
+	// Find trampoline function in internal/remote
+	// lookup("remote.trampoline")
 
 	if Debug_remote > 0 {
 		for p, _ := range iprog.AllPackages {
@@ -316,4 +318,6 @@ func escapesRemote() {
 			log.Printf("remote: analyze: found remoteVar %v declared at %v", v, iprog.Fset.Position(v.Pos()))
 		}
 	}
+
+	// TODO(vsekhar): add trampoline call ahead of each access to a remote var
 }
