@@ -150,15 +150,6 @@ func escapesRemote() {
 		return
 	}
 
-	// add internal/remote as import to main package
-	irPath := "internal/remote"
-	pathVal := Val{U: irPath}
-	rpkg := importfile(&pathVal)
-	rpkg.Direct = true
-	my := lookup(rpkg.Name)
-	pack := nod(OPACK, nil, nil)
-	pack.Sym = my
-	pack.Name.Pkg = rpkg
 
 	if Debug_remote > 0 {
 		for p, _ := range iprog.AllPackages {

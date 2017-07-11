@@ -294,12 +294,7 @@ func Main(archInit func(*Arch)) {
 	}
 
 	if flag_remote && !pure_go {
-		if !pure_go {
-			log.Fatal("-remote does not support cgo or partial compilation")
-		}
-
-		// real package, referred to by generated remote variable accesses
-		remotepkg = types.NewPkg("internal/remote", "remote")
+		log.Fatal("-remote does not support cgo or partial compilation")
 	}
 	if flag_remote && !dolinkobj {
 		log.Fatal("-remote requires generating compiler and linker objects")
@@ -439,6 +434,30 @@ func Main(archInit func(*Arch)) {
 
 	timings.Start("fe", "loadsys")
 	loadsys()
+	if flag_remote {
+		// Import internal/remote as unnamed package
+		remotepkg = importfile(&Val{U: "internal/remote"})
+		remotepkg.Direct = true
+		_, ok := remotepkg.LookupOK("Trampoline")
+		if !ok {
+			Fatalf("internal/remote.Trampoline not found")
+		}
+
+		// find main()
+		for _, n := range xtop {
+			if n.Op == ODCLFUNC && n.Func.Shortname.Name == "main" {
+				fmt.Printf("found main")
+			}
+		}
+		// Would normally give a package a symbol to make it visible to developer
+		// code:
+		//   pack := nod(OPACK, nil, nil)
+		//   pack.Sym = lookup(remotepkg.Name)
+		//   pack.Name.Pkg = remotepkg
+
+		// Insert a call to the trampoline at the start of main()
+
+	}
 
 	timings.Start("fe", "parse")
 	lines := parseFiles(flag.Args())
