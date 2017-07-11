@@ -8,6 +8,8 @@ package gc
 
 import (
 	"bytes"
+	"flag"
+	"go/types"
 	"log"
 
 	"golang.org/x/tools/go/callgraph"
@@ -62,10 +64,67 @@ func visitNodes(root *callgraph.Node, node func(*callgraph.Node) error) error {
 	return nil
 }
 
-func escapesRemote(args []string, all []*Node) {
-	// Compile SSA
+// addQueries adds points-to queries to the provided ptaConf from the values
+// provided in vars. Pointer values are added to ptrs from which results can
+// be read after the analysis is run.
+func addQueries(ptaConf *pointer.Config, ptrs map[*pointer.Pointer]struct{}, vars map[ssa.Value]struct{}) {
+	for v := range vars {
+		// Query pointer-like objects directly
+		if pointer.CanPoint(v.Type()) {
+			ptr, err := ptaConf.AddExtendedQuery(v, "x")
+			if err != nil {
+				panic(err)
+			}
+			ptrs[ptr] = struct{}{}
+		}
+
+		if p, ok := v.Type().Underlying().(*types.Pointer); ok {
+			e := p.Elem()
+
+			// handlePointee adds queries related to the pointee (if any). It is
+			// expressed as function in order to recurse into sub-types as needed.
+			var handlePointee func(types.Type)
+			handlePointee = func(t types.Type) {
+				if pointer.CanPoint(t) {
+					ptr, err := ptaConf.AddExtendedQuery(v, "*x")
+					if err != nil {
+						panic(err)
+					}
+					ptrs[ptr] = struct{}{}
+				}
+
+				switch x := t.(type) {
+				case *types.Named:
+					handlePointee(x.Underlying())
+				case *types.Struct:
+					for i := 0; i < x.NumFields(); i++ {
+						f := x.Field(i)
+						if pointer.CanPoint(f.Type()) {
+							ptr, err := ptaConf.AddExtendedQuery(v, "x."+f.Name())
+							if err != nil {
+								panic(err)
+							}
+							ptrs[ptr] = struct{}{}
+						}
+					}
+				}
+			}
+			handlePointee(e)
+		}
+	}
+}
+
+// escapesRemote is called on each invocation of cmd/compile, but is a no-op
+// on each invocation except the one during which the main package is being
+// compiled.
+func escapesRemote() {
+	if Debug_remote > 0 {
+		log.Printf("remote: escapesRemote invoked with: %v", flag.Args())
+	}
+
+	// Load the requested files from args
 	var conf loader.Config
-	rest, err := conf.FromArgs(args, false) // no tests
+	rest, err := conf.FromArgs(flag.Args(), false) // no tests
 	if err != nil {
 		log.Fatalf("remote: analyze: %v", err)
 	}
@@ -76,28 +135,47 @@ func escapesRemote(args []string, all []*Node) {
 	if err != nil {
 		log.Fatalf("remote: analyze: %v", err)
 	}
-	fset := iprog.Fset
-	if Debug_remote > 0 {
-		for p, _ := range iprog.AllPackages {
-			log.Printf("remote: analyze: package %s", p.Name())
+
+	// Determine if there is a main, otherwise return
+	var mainPkg *types.Package
+	for p, _ := range iprog.AllPackages {
+		if p.Name() == "main" {
+			mainPkg = p
 		}
 	}
-	prog := ssautil.CreateProgram(iprog, 0)
-	mainPkg := prog.Package(iprog.Created[0].Pkg)
-	prog.Build()
-
-	if Debug_remote > 0 {
-		logPkg(mainPkg)
+	if mainPkg == nil {
+		if Debug_remote > 0 {
+			log.Print("remote: main package not found in this invocation")
+		}
+		return
 	}
 
-	// Build call graph
+	// add internal/remote as import to main package
+	irPath := "internal/remote"
+	pathVal := Val{U: irPath}
+	rpkg := importfile(&pathVal)
+	rpkg.Direct = true
+	my := lookup(rpkg.Name)
+	pack := nod(OPACK, nil, nil)
+	pack.Sym = my
+	pack.Name.Pkg = rpkg
+
+	if Debug_remote > 0 {
+		for p, _ := range iprog.AllPackages {
+			log.Printf("remote: analyzing %s", p.Name())
+		}
+	}
+
+	prog := ssautil.CreateProgram(iprog, 0)
+	mainPkgSSA := prog.Package(mainPkg)
+	prog.Build()
 	config := &pointer.Config{
-		Mains:          []*ssa.Package{mainPkg},
+		Mains:          []*ssa.Package{mainPkgSSA},
 		BuildCallGraph: true,
 	}
 	ptrres, err := pointer.Analyze(config)
 	if err != nil {
-		log.Fatalf("remote:analyze: %v", err)
+		log.Fatalf("remote: analyze: %v", err)
 	}
 	cg := ptrres.CallGraph
 
@@ -110,13 +188,13 @@ func escapesRemote(args []string, all []*Node) {
 		return nil
 	})
 	if err != nil {
-		log.Fatalf("remote:analyze: %v", err)
+		log.Fatalf("remote: analyze: %v", err)
 	}
 
 	if Debug_remote > 0 {
 		for site, edges := range gosites {
 			for _, edge := range edges {
-				log.Printf("remote: analyze: gosite of %v at %v", edge.Callee, fset.Position(site.Pos()))
+				log.Printf("remote: analyze: found gosite of %v at %v", edge.Callee, iprog.Fset.Position(site.Pos()))
 			}
 		}
 	}
@@ -138,7 +216,7 @@ func escapesRemote(args []string, all []*Node) {
 
 	if Debug_remote > 0 {
 		for af, _ := range asyncFuncs {
-			log.Printf("remote: analyze: asyncFunc %v at %v", af, fset.Position(af.Func.Pos()))
+			log.Printf("remote: analyze: found asyncFunc %v at %v", af, iprog.Fset.Position(af.Func.Pos()))
 		}
 	}
 
@@ -175,7 +253,7 @@ func escapesRemote(args []string, all []*Node) {
 
 	if Debug_remote > 0 {
 		for rg, _ := range remoteGlobals {
-			log.Printf("remote: analyze: remoteGlobal %v at %v", rg, fset.Position(rg.Pos()))
+			log.Printf("remote: analyze: found remoteGlobal %v at %v", rg, iprog.Fset.Position(rg.Pos()))
 		}
 	}
 
@@ -198,49 +276,53 @@ func escapesRemote(args []string, all []*Node) {
 
 	if Debug_remote > 0 {
 		for v, _ := range bridgeVars {
-			log.Printf("remote: analyze: bridgeVar %v at %v", v, fset.Position(v.Pos()))
-			for _, r := range *v.Referrers() {
-				log.Printf("                       ref %v at %v", r, fset.Position(r.Pos()))
-			}
+			log.Printf("remote: analyze: found bridgeVar %v at %v", v, iprog.Fset.Position(v.Pos()))
 		}
 	}
 
 	// Expand bridgeVars to their points-to sets
-	config = &pointer.Config{
-		Mains:          []*ssa.Package{mainPkg},
+	ptaConf := &pointer.Config{
+		Mains:          []*ssa.Package{mainPkgSSA},
 		BuildCallGraph: false,
 	}
-	for v, _ := range bridgeVars {
-		config.AddQuery(v)
-	}
-	ptrres, err = pointer.Analyze(config)
-	if err != nil {
-		log.Fatalf("remote:analyze: %v", err)
-	}
-	remoteVars := make(map[ssa.Value][]*pointer.Label)
-	for _, ptr := range ptrres.Queries {
-		for _, l := range ptr.PointsTo().Labels() {
-			remoteVars[l.Value()] = append(remoteVars[l.Value()], l)
+	ptrs := make(map[*pointer.Pointer]struct{})
+	addQueries(ptaConf, ptrs, bridgeVars)
+	remoteVars := make(map[ssa.Value]struct{})
+	numRemoteVars := 0
+	rounds := 0
+	for {
+		rounds++
+		addQueries(ptaConf, ptrs, remoteVars)
+		_, err := pointer.Analyze(ptaConf)
+		if err != nil {
+			log.Fatalf("remote: analyze: %v", err)
 		}
+		for ptr := range ptrs {
+			for _, l := range ptr.PointsTo().Labels() {
+				remoteVars[l.Value()] = struct{}{}
+			}
+		}
+
+		// Nothing new? Then stop here.
+		if len(remoteVars) == numRemoteVars {
+			break
+		}
+
+		// Prepare for next attempt
+		ptrs = make(map[*pointer.Pointer]struct{})
+		ptaConf = &pointer.Config{
+			Mains:          []*ssa.Package{mainPkgSSA},
+			BuildCallGraph: false,
+		}
+		numRemoteVars = len(remoteVars)
+	}
+	if Debug_remote > 0 {
+		log.Printf("Analysis took %d rounds", rounds)
 	}
 
 	if Debug_remote > 0 {
 		for v, _ := range remoteVars {
-			log.Printf("remote: analyze: remoteVar %v declared at %v", v, fset.Position(v.Pos()))
-			for _, r := range *v.Referrers() {
-				log.Printf("                       ref %v at %v", r, fset.Position(r.Pos()))
-			}
+			log.Printf("remote: analyze: found remoteVar %v declared at %v", v, iprog.Fset.Position(v.Pos()))
 		}
-	}
-
-	// TODO: map remoteGlobals and remoteVars to declarations in parse tree,
-	// rewrite:
-	//  - type --> uint64
-	//  - declaration/allocation --> remote api Alloc()
-	//  - access --> remote api Get/Set() and static cast
-
-	// parse tree output:
-	if Debug_remote > 0 {
-		dumplist("remote: ", Nodes{&all})
 	}
 }

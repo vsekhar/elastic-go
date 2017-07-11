@@ -583,7 +583,7 @@ func (t *tester) registerTests() {
 		}
 	}
 
-	if t.supportedBuildmode("remote") && t.goos == "linux" && t.goarch == "amd64" {
+	if t.supportedBuildmode("remote") {
 		t.registerTest("testremote", "../misc/remote", "./test.bash")
 	}
 
@@ -810,7 +810,7 @@ func (t *tester) supportedBuildmode(mode string) bool {
 		}
 		return false
 	case "remote":
-		if t.goos == "linux" && t.goarch == "amd64" {
+		if (t.goos == "linux" || t.goos == "darwin") && t.goarch == "amd64" {
 			return true
 		}
 		return false

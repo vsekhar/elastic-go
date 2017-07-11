@@ -10,15 +10,18 @@ function cleanup() {
 }
 trap cleanup EXIT
 
-# go build -buildmode=remote -o a.out -gcflags="-d remote"
-go build -o a.out
+# go build -o a.out
+go build -buildmode=remote -o a.out -gcflags="-d remote"
 OUTPUT=$(go remote ./a.out 2>&1)
-EXPECTED="var1: 1
+EXPECTED="internal/remote added
+var1: 1
 var2: 4
 var3: 5
 lib RemoteVar: 42"
 if [ "$OUTPUT" != "$EXPECTED" ]; then
   echo invalid output:
-  echo $OUTPUT
+  echo "$OUTPUT"
+  echo expected:
+  echo "$EXPECTED"
   exit 1
 fi

@@ -711,5 +711,4 @@ var knownFormats = map[string]string{
 	"*vendor/golang.org/x/tools/go/callgraph.Node %v": "",
 	"*vendor/golang.org/x/tools/go/ssa.Global %v":     "",
 	"vendor/golang.org/x/tools/go/ssa.Value %v":       "",
-	"vendor/golang.org/x/tools/go/ssa.Instruction %v": "",
 }

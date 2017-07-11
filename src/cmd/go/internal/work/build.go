@@ -364,11 +364,12 @@ func BuildModeInit() {
 		cfg.ExeSuffix = ".so"
 		ldBuildmode = "plugin"
 	case "remote":
+		pkgsFilter = oneMainPkg
 		if gccgo {
 			base.Fatalf("-buildmode=remote not supported with gccgo")
 		}
 		switch platform {
-		case "linux/amd64":
+		case "linux/amd64", "darwin/amd64":
 			ldBuildmode = "exe"
 		default:
 			base.Fatalf("-buildmode=remote not supported on %s\n", platform)
@@ -468,16 +469,6 @@ func runBuild(cmd *base.Command, args []string) {
 		p.Stale = true // must build - not up to date
 		p.StaleReason = "build -o flag in use"
 		a := b.Action(ModeInstall, depMode, p)
-
-		if cfg.BuildBuildmode == "remote" {
-			// TODO(vsekhar):
-			//  - traverse tree of actions rooted at 'a'
-			//  - gather load.Package's
-			//  - configure x/tools/go/loader
-			//  - load and build call graph
-			//  - find globalVars, bridgeVars, remoteVars
-			//  - insert var tags into actions corresponding to their packages
-		}
 		b.Do(a)
 		return
 	}
@@ -491,6 +482,11 @@ func runBuild(cmd *base.Command, args []string) {
 		} else {
 			a = b.libaction(libName, pkgs, ModeBuild, depMode)
 		}
+	} else if cfg.BuildBuildmode == "remote" {
+		// TODO(vsekhar): perform remote escape analysis, then two options:
+		//  - rewrite ASTs, output new files (similar to how coverage is done)
+		//  - create new export data file that compile can read and apply to SSA
+		//    intermediate form
 	} else {
 		a = &Action{}
 		for _, p := range pkgs {

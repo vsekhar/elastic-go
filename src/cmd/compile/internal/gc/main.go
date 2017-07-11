@@ -585,7 +585,7 @@ func Main(archInit func(*Arch)) {
 			// Required for moving heap allocations of variables that cross
 			// goroutines to remote allocations.
 			timings.Start("fe", "remote")
-			escapesRemote(flag.Args(), xtop)
+			escapesRemote()
 		}
 
 		// Prepare for SSA compilation.

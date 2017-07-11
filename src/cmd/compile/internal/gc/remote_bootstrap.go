@@ -12,4 +12,4 @@ package gc
 // set by command line flag -remote
 var flag_remote bool
 
-func escapesRemote([]string, []*Node) {}
+func escapesRemote() {}

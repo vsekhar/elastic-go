@@ -5,9 +5,6 @@
 
 package remote
 
-// TODO: ensure this package is added by compiler, cannot import from package
-// runtime due to cyclic dependency
-
 import (
 	"os"
 
@@ -34,4 +31,8 @@ func initRemote() {
 		panic("failed to connect to remote runtime: " + err.Error())
 	}
 	client = pb.NewRemoteRuntimeClient(conn)
+}
+
+func trampoline() {
+	println("boing!")
 }
