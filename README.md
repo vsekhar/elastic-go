@@ -7,6 +7,44 @@ that scales automatically as required.
 
 The project is active but not yet functional.
 
+## Hacking
+
+Install Go 1.5 or later to your system (for bootstrapping). You can download the latest at https://golang.org/dl/.
+
+Set `GOBOOTSTRAP` to the location of your go installation (e.g. `/usr/local/go`).
+
+Clone this repo.
+
+Add the [gofmt pre-commit hook](https://golang.org/misc/git/pre-commit) to your repo.
+
+## Testing
+
+To run the full compiler test suite:
+
+    $ cd elastic-go/src && all.bash
+
+The full compiler test suite should pass before committing code.
+
+For a faster code-test loop, you can run tests specific to remote compilation using:
+
+    $ cd elastic-go/src && testremote.bash
+
+These tests are found in `/misc/remote/test.bash` but cannot be invoked from that script directly (doing so would incorrectly use your system's Go installation rather than a freshly compiled one from this repo).
+
+## Merging upstream
+To keep things clean, all development of Elastic Go happens on the `dev.remote` branch. All other branches follow the corresponding branch in the upstream repo.
+
+Add the original repo as upstream and fetch:
+
+    $ git remote add -f upstream https://go.googlesource.com/go
+
+Fetch and merge to master, then merge to dev.remote:
+
+    $ git checkout master
+    $ git merge upstream/master
+    $ git checkout dev.remote
+    $ git merge master
+
 The upstream README follows.
 
 ---
