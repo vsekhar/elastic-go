@@ -238,7 +238,7 @@ const maxStackSize = 1 << 31
 // worker indicates which of the backend workers is doing the processing.
 func compileSSA(fn *Node, worker int) {
 	ssafn := buildssa(fn, worker)
-	if flag_remote {
+	if remoteFile != "" {
 		// TODO(vsekhar): Rewrite accesses to remote vars in SSA
 		// (analysis is done over the whole program parse tree earlier)
 	}

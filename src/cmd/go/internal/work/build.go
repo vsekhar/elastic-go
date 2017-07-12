@@ -458,6 +458,16 @@ func runBuild(cmd *base.Command, args []string) {
 		depMode = ModeInstall
 	}
 
+	if cfg.BuildBuildmode == "remote" {
+		aPath := path.Join(b.WorkDir, "remote.out")
+		aFile, err := os.Create(aPath)
+		if err != nil {
+			base.Fatalf("go build: failed to open remote analysis output file - %s", err)
+		}
+		b.escapesRemote(args, aFile)
+		aFile.Close()
+	}
+
 	if cfg.BuildO != "" {
 		if len(pkgs) > 1 {
 			base.Fatalf("go build: cannot use -o with multiple packages")
@@ -482,11 +492,6 @@ func runBuild(cmd *base.Command, args []string) {
 		} else {
 			a = b.libaction(libName, pkgs, ModeBuild, depMode)
 		}
-	} else if cfg.BuildBuildmode == "remote" {
-		// TODO(vsekhar): perform remote escape analysis, then two options:
-		//  - rewrite ASTs, output new files (similar to how coverage is done)
-		//  - create new export data file that compile can read and apply to SSA
-		//    intermediate form
 	} else {
 		a = &Action{}
 		for _, p := range pkgs {
@@ -2265,9 +2270,9 @@ func (gcToolchain) gc(b *Builder, p *load.Package, archive, obj string, asmhdr b
 		gcargs = append(gcargs, "-dwarf=false")
 	}
 
-	// The compiler needs to determine and rewrite accesses to remote variables.
 	if cfg.BuildBuildmode == "remote" {
-		gcargs = append(gcargs, "-remote")
+		aPath := path.Join(b.WorkDir, "remote.out")
+		gcargs = append(gcargs, "-remote="+aPath)
 	}
 
 	for _, path := range p.Imports {

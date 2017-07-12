@@ -214,7 +214,7 @@ func Main(archInit func(*Arch)) {
 	flag.BoolVar(&writearchive, "pack", false, "write package file instead of object file")
 	objabi.Flagcount("r", "debug generated wrappers", &Debug['r'])
 	flag.BoolVar(&flag_race, "race", false, "enable race detector")
-	flag.BoolVar(&flag_remote, "remote", false, "compile a remote binary")
+	flag.StringVar(&remoteFile, "remote", "", "compile a remote binary using analysis in `file`")
 	objabi.Flagcount("s", "warn about composite literals that can be simplified", &Debug['s'])
 	flag.StringVar(&pathPrefix, "trimpath", "", "remove `prefix` from recorded source file paths")
 	flag.BoolVar(&safemode, "u", false, "reject unsafe code")
@@ -293,10 +293,10 @@ func Main(archInit func(*Arch)) {
 		instrumenting = true
 	}
 
-	if flag_remote && !pure_go {
+	if remoteFile != "" && !pure_go {
 		log.Fatal("-remote does not support cgo or partial compilation")
 	}
-	if flag_remote && !dolinkobj {
+	if remoteFile != "" && !dolinkobj {
 		log.Fatal("-remote requires generating compiler and linker objects")
 	}
 
@@ -434,7 +434,7 @@ func Main(archInit func(*Arch)) {
 
 	timings.Start("fe", "loadsys")
 	loadsys()
-	if flag_remote {
+	if remoteFile != "" {
 		// Import internal/remote as unnamed package
 		remotepkg = importfile(&Val{U: "internal/remote"})
 		remotepkg.Direct = true
@@ -597,14 +597,6 @@ func Main(archInit func(*Arch)) {
 				Curfn = n
 				transformclosure(n)
 			}
-		}
-
-		if flag_remote {
-			// Phase 7a: Concurrency escape analysis.
-			// Required for moving heap allocations of variables that cross
-			// goroutines to remote allocations.
-			timings.Start("fe", "remote")
-			escapesRemote()
 		}
 
 		// Prepare for SSA compilation.

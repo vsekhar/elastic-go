@@ -215,6 +215,9 @@ var flag_race bool
 
 var flag_msan bool
 
+// set by command line flag -remote
+var remoteFile string
+
 var flagDWARF bool
 
 // Whether we are adding any sort of code instrumentation, such as
