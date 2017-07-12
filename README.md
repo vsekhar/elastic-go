@@ -19,15 +19,13 @@ Add the [gofmt pre-commit hook](https://golang.org/misc/git/pre-commit) to your 
 
 ## Testing
 
-To run the full compiler test suite:
-
-    $ cd elastic-go/src && all.bash
+To run the full compiler test suite, run `all.bash` from within the `src` directory.
 
 The full compiler test suite should pass before committing code.
 
 For a faster code-test loop, you can run tests specific to remote compilation using:
 
-    $ cd elastic-go/src && testremote.bash
+    $ GOTESTONLY=testremote ./all.bash
 
 These tests are found in `/misc/remote/test.bash` but cannot be invoked from that script directly (doing so would incorrectly use your system's Go installation rather than a freshly compiled one from this repo).
 
