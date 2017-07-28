@@ -1,5 +1,7 @@
 # Elastic Go
 
+[![Build Status](https://travis-ci.org/vsekhar/elastic-go.svg?branch=dev.remote)](https://travis-ci.org/vsekhar/elastic-go)
+
 Elastic Go is a fork of the Go programming language that supports building
 binaries that utilize a remote API for runtime services (memory, scheduling,
 etc.). This is a first step to running binaries on cloud infrastructure in a way
@@ -15,7 +17,7 @@ Set `GOBOOTSTRAP` to the location of your go installation (e.g. `/usr/local/go`)
 
 Clone this repo.
 
-Add the [gofmt pre-commit hook](https://golang.org/misc/git/pre-commit) to your repo.
+Add the [gofmt pre-commit hook](misc/git/pre-commit) to your repo.
 
 ## Testing
 
@@ -27,7 +29,7 @@ For a faster code-test loop, you can run tests specific to remote compilation us
 
     $ GOTESTONLY=testremote ./all.bash
 
-These tests are found in `/misc/remote/test.bash` but cannot be invoked from that script directly (doing so would incorrectly use your system's Go installation rather than a freshly compiled one from this repo).
+These tests are found in [`/misc/remote/test.bash`](misc/remote/test.bash) but cannot be invoked from that script directly (doing so would incorrectly use your system's Go installation rather than a freshly compiled one from this repo).
 
 ## Merging upstream
 To keep things clean, all development of Elastic Go happens on the `dev.remote` branch. All other branches follow the corresponding branch in the upstream repo.
