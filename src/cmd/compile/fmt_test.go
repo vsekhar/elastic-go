@@ -655,7 +655,6 @@ var knownFormats = map[string]string{
 	"float64 %.3f":                                    "",
 	"float64 %.6g":                                    "",
 	"float64 %g":                                      "",
-	"go/token.Position %v":                            "",
 	"int %-12d":                                       "",
 	"int %-6d":                                        "",
 	"int %-8o":                                        "",
@@ -708,7 +707,4 @@ var knownFormats = map[string]string{
 	"uint8 %d":         "",
 	"uint8 %x":         "",
 	"uintptr %d":       "",
-	"*vendor/golang.org/x/tools/go/callgraph.Node %v": "",
-	"*vendor/golang.org/x/tools/go/ssa.Global %v":     "",
-	"vendor/golang.org/x/tools/go/ssa.Value %v":       "",
 }
