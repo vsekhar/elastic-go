@@ -670,16 +670,6 @@ func InstallPackages(args []string, forGet bool) {
 	}
 }
 
-func init() {
-	cfg.Goarch = cfg.BuildContext.GOARCH
-	cfg.Goos = cfg.BuildContext.GOOS
-
-	if cfg.Goos == "windows" {
-		cfg.ExeSuffix = ".exe"
-	}
-	cfg.Gopath = filepath.SplitList(cfg.BuildContext.GOPATH)
-}
-
 // A Builder holds global state about a build.
 // It does not hold per-package state, because we
 // build packages in parallel, and the builder is shared.
@@ -2994,8 +2984,8 @@ func (tools gccgoToolchain) link(b *Builder, root *Action, out string, allaction
 		// libffi.
 		ldflags = append(ldflags, "-Wl,-r", "-nostdlib", "-Wl,--whole-archive", "-lgolibbegin", "-Wl,--no-whole-archive")
 
-		if b.gccSupportsNoPie() {
-			ldflags = append(ldflags, "-no-pie")
+		if nopie := b.gccNoPie(); nopie != "" {
+			ldflags = append(ldflags, nopie)
 		}
 
 		// We are creating an object file, so we don't want a build ID.
@@ -3242,11 +3232,18 @@ func (b *Builder) ccompilerCmd(envvar, defcmd, objdir string) []string {
 	return a
 }
 
-// On systems with PIE (position independent executables) enabled by default,
-// -no-pie must be passed when doing a partial link with -Wl,-r. But -no-pie is
-// not supported by all compilers.
-func (b *Builder) gccSupportsNoPie() bool {
-	return b.gccSupportsFlag("-no-pie")
+// gccNoPie returns the flag to use to request non-PIE. On systems
+// with PIE (position independent executables) enabled by default,
+// -no-pie must be passed when doing a partial link with -Wl,-r.
+// But -no-pie is not supported by all compilers, and clang spells it -nopie.
+func (b *Builder) gccNoPie() string {
+	if b.gccSupportsFlag("-no-pie") {
+		return "-no-pie"
+	}
+	if b.gccSupportsFlag("-nopie") {
+		return "-nopie"
+	}
+	return ""
 }
 
 // gccSupportsFlag checks to see if the compiler supports a flag.
@@ -3577,8 +3574,8 @@ func (b *Builder) collect(p *load.Package, obj, ofile string, cgoLDFLAGS, outObj
 
 	ldflags = append(ldflags, "-Wl,-r", "-nostdlib")
 
-	if b.gccSupportsNoPie() {
-		ldflags = append(ldflags, "-no-pie")
+	if flag := b.gccNoPie(); flag != "" {
+		ldflags = append(ldflags, flag)
 	}
 
 	// We are creating an object file, so we don't want a build ID.
