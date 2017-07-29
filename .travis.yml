@@ -4,18 +4,17 @@ os:
   - linux
   - osx
 
+addons:
+  apt:
+    packages:
+      - clang
+
 branches:
   only:
     - dev.remote
 
 # don't run go get -t ./...
-# ThreadSanitizer fix:
-#   https://github.com/google/sanitizers/wiki/ThreadSanitizerCppManual#faq
-#   https://github.com/ruslo/hunter/issues/718#issuecomment-290610583
-install:
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get install clang-3.8; fi
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-3.8 100; fi
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-3.8 100; fi
+install: true
 
 script:
   - cd src
