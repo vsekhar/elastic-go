@@ -41,7 +41,7 @@
 # This is used by cgo.  Default is CC.
 #
 # CXX_FOR_TARGET: Command line to run to compile C++ code for GOARCH.
-# This is used by cgo. Default is CXX, or, if that is not set,
+# This is used by cgo. Default is CXX, or, if that is not set, 
 # "g++" or "clang++".
 #
 # FC: Command line to run to compile Fortran code for GOARCH.
@@ -179,15 +179,12 @@ CC=$CC_FOR_TARGET "$GOTOOLDIR"/go_bootstrap install $GO_FLAGS -gcflags "$GO_GCFL
 
 # Check that there are no new files in $GOROOT/bin other than go and gofmt
 # and $GOOS_$GOARCH (a directory used when cross-compiling).
-# VS: this doesn't work for reasons I don't know
-: <<'ENDCOMMENT'
 (cd $GOROOT/bin && for f in *; do
 	if ! expr " $old_bin_files go gofmt ${GOOS}_${GOARCH} " : ".* $f " >/dev/null 2>/dev/null; then
 		echo 1>&2 "ERROR: unexpected new file in $GOROOT/bin: $f"
 		exit 1
 	fi
 done)
-ENDCOMMENT
 
 echo
 
