@@ -45,6 +45,11 @@ Fetch and merge to master, then merge to dev.remote:
     $ git checkout dev.remote
     $ git merge master
 
+To see changes made to this branch relative to the most recently merged commit
+in master:
+
+    $ git diff master -- . ":(exclude,top)src/vendor"
+
 The upstream README follows.
 
 ---
