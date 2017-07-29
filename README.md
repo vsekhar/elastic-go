@@ -1,7 +1,5 @@
 # Elastic Go
 
-[![Build Status](https://travis-ci.org/vsekhar/elastic-go.svg?branch=dev.remote)](https://travis-ci.org/vsekhar/elastic-go)
-
 Elastic Go is a fork of the Go programming language that supports building
 binaries that utilize a remote API for runtime services (memory, scheduling,
 etc.). This is a first step to running binaries on cloud infrastructure in a way
