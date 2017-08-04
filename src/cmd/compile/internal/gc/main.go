@@ -435,6 +435,15 @@ func Main(archInit func(*Arch)) {
 	timings.Start("fe", "loadsys")
 	loadsys()
 	if remoteFile != "" {
+		remoteFile, err := os.Open(remoteFile)
+		if err != nil {
+			Fatalf("remote analysis file specified by -remote could not be opened")
+		}
+		_ = remoteFile
+
+		// TODO(vsekhar): load analysis results into global vars using
+		// package 'internal/remote/build'.
+
 		// Import internal/remote as unnamed package
 		remotepkg = importfile(&Val{U: "internal/remote"})
 		remotepkg.Direct = true
@@ -443,20 +452,13 @@ func Main(archInit func(*Arch)) {
 			Fatalf("internal/remote.Trampoline not found")
 		}
 
-		// find main()
-		for _, n := range xtop {
-			if n.Op == ODCLFUNC && n.Func.Shortname.Name == "main" {
-				fmt.Printf("found main")
-			}
-		}
 		// Would normally give a package a symbol to make it visible to developer
 		// code:
 		//   pack := nod(OPACK, nil, nil)
 		//   pack.Sym = lookup(remotepkg.Name)
 		//   pack.Name.Pkg = remotepkg
-
-		// Insert a call to the trampoline at the start of main()
-
+		// Don't need to do that in this case since only the compiler calls into
+		// this package.
 	}
 
 	timings.Start("fe", "parse")

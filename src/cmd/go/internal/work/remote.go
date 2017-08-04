@@ -96,10 +96,6 @@ func addQueries(ptaConf *pointer.Config, ptrs map[*pointer.Pointer]struct{}, var
 }
 
 func (b *Builder) escapesRemote(args []string, w io.Writer) {
-	if cfg.BuildV {
-		log.Printf("remote: escapesRemote invoked with: %v", args)
-	}
-
 	// Load the requested files from args (or current dir)
 	var conf loader.Config
 	if len(args) == 0 {
@@ -126,15 +122,6 @@ func (b *Builder) escapesRemote(args []string, w io.Writer) {
 	}
 	if mainPkg == nil {
 		log.Fatal("remote: main package not found")
-	}
-
-	// Find trampoline function in internal/remote
-	// lookup("remote.trampoline")
-
-	if cfg.BuildV {
-		for p, _ := range iprog.AllPackages {
-			log.Printf("remote: analyzing %s", p.Name())
-		}
 	}
 
 	prog := ssautil.CreateProgram(iprog, 0)
@@ -287,14 +274,12 @@ func (b *Builder) escapesRemote(args []string, w io.Writer) {
 		}
 		numRemoteVars = len(remoteVars)
 	}
-	if cfg.BuildV {
-		log.Printf("Analysis took %d rounds", rounds)
-	}
 
 	if cfg.BuildV {
 		for v, _ := range remoteVars {
 			log.Printf("remote: analyze: found remoteVar %v declared at %v", v, iprog.Fset.Position(v.Pos()))
 		}
+		log.Printf("Analysis took %d rounds", rounds)
 	}
 
 	// TODO(vsekhar) output data needed by compile to w

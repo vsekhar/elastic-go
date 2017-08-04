@@ -208,6 +208,11 @@ func buildssa(fn *Node, worker int) *ssa.Func {
 	// Don't carry reference this around longer than necessary
 	s.exitCode = Nodes{}
 
+	if remoteFile != "" {
+		// TODO(vsekhar): data from remoteFile and SSA forms are available at this
+		// point so trampoline added and removed here. Much mapping, very rewrite.
+	}
+
 	// Main call to ssa package to compile function
 	ssa.Compile(s.f)
 	return s.f
