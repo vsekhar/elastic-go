@@ -11,7 +11,7 @@ The project is active but not yet functional.
 
 Install Go 1.5 or later to your system (for bootstrapping). You can download the latest at https://golang.org/dl/.
 
-Set `GOBOOTSTRAP` to the location of your go installation (e.g. `/usr/local/go`).
+Set `GOROOT_BOOTSTRAP` to the location of your go installation (e.g. `/usr/local/go`).
 
 Clone this repo.
 
@@ -35,6 +35,10 @@ To keep things clean, all development of Elastic Go happens on the `dev.remote` 
 Add the original repo as upstream and fetch:
 
     $ git remote add -f upstream https://go.googlesource.com/go
+
+Create the local `master` branch which points to `origin/master`:
+
+    $ git checkout -t -b master origin/master
 
 Fetch and merge to master, then merge to dev.remote:
 
