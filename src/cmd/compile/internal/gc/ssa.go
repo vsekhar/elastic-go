@@ -542,6 +542,7 @@ func (s *state) stmt(n *Node) {
 	// Expression statements
 	case OCALLFUNC:
 		if isIntrinsicCall(n) {
+			s.Logf("Instrinsic call: %s", n.Left.Sym.Name)
 			s.intrinsicCall(n)
 			return
 		}
@@ -550,6 +551,7 @@ func (s *state) stmt(n *Node) {
 	case OCALLMETH, OCALLINTER:
 		s.call(n, callNormal)
 		if n.Op == OCALLFUNC && n.Left.Op == ONAME && n.Left.Class() == PFUNC {
+			s.Logf("Function call: %s", n.Left.Sym.Name)
 			if fn := n.Left.Sym.Name; compiling_runtime && fn == "throw" ||
 				n.Left.Sym.Pkg == Runtimepkg && (fn == "throwinit" || fn == "gopanic" || fn == "panicwrap" || fn == "block") {
 				m := s.mem()

@@ -443,22 +443,6 @@ func Main(archInit func(*Arch)) {
 
 		// TODO(vsekhar): load analysis results into global vars using
 		// package 'internal/remote/build'.
-
-		// Import internal/remote as unnamed package
-		remotepkg = importfile(&Val{U: "internal/remote"})
-		remotepkg.Direct = true
-		_, ok := remotepkg.LookupOK("Trampoline")
-		if !ok {
-			Fatalf("internal/remote.Trampoline not found")
-		}
-
-		// Would normally give a package a symbol to make it visible to developer
-		// code:
-		//   pack := nod(OPACK, nil, nil)
-		//   pack.Sym = lookup(remotepkg.Name)
-		//   pack.Name.Pkg = remotepkg
-		// Don't need to do that in this case since only the compiler calls into
-		// this package.
 	}
 
 	timings.Start("fe", "parse")

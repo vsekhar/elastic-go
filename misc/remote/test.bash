@@ -10,7 +10,8 @@ function cleanup() {
 }
 trap cleanup EXIT
 
-GOSSAFUNC=main go build -v -buildmode=remote -o a.out -gcflags="-d remote"
+# GOSSAFUNC=main
+go build -v -buildmode=remote -o a.out -gcflags="-d remote"
 OUTPUT=$(go remote ./a.out 2>&1)
 EXPECTED="internal/remote added
 var1: 1

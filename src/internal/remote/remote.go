@@ -33,6 +33,6 @@ func initRemote() {
 	client = pb.NewRemoteRuntimeClient(conn)
 }
 
-func Trampoline() {
+func trampoline() {
 	println("boing!")
 }
